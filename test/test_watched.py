@@ -734,6 +734,58 @@ def test_json_state_is_migrated_and_unwatched_transition_is_persisted(tmp_path):
     assert row == (0, 0, item.status.viewed_date.isoformat())
 
 
+def test_watched_state_is_scoped_to_source_server(tmp_path):
+    item_identifiers = MediaIdentifiers(
+        title="Source Scoped Item",
+        locations=("Source Scoped Item.mkv",),
+        imdb_id="tt7654322",
+    )
+    watched_item = MediaItem(
+        identifiers=item_identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=item_identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {
+            "user": UserData(
+                libraries={
+                    "Movies": LibraryData(title="Movies", movies=[watched_item])
+                }
+            )
+        },
+        env,
+        "Plex",
+    )
+    apply_manual_unwatched_state(
+        {
+            "user": UserData(
+                libraries={
+                    "Movies": LibraryData(title="Movies", movies=[unwatched_item])
+                }
+            )
+        },
+        env,
+        "Emby",
+    )
+
+    assert unwatched_item.status.viewed_date == datetime(
+        2024, 1, 1, tzinfo=timezone.utc
+    )
+
+
 # def test_mapping_cleanup_watched():
 #    user_watched_list_1 = {
 #        "user1": {

@@ -55,7 +55,7 @@ class UserData(BaseModel):
     libraries: dict[str, LibraryData] = Field(default_factory=dict)
 
 
-def mediaitem_state_key(item: MediaItem) -> str:
+def mediaitem_state_key(item: MediaItem, source_server: str | None = None) -> str:
     payload = {
         "title": item.identifiers.title or "",
         "locations": list(item.identifiers.locations),
@@ -63,6 +63,8 @@ def mediaitem_state_key(item: MediaItem) -> str:
         "tvdb_id": item.identifiers.tvdb_id or "",
         "tmdb_id": item.identifiers.tmdb_id or "",
     }
+    if source_server:
+        payload["source_server"] = source_server
     return json.dumps(payload, sort_keys=True)
 
 
@@ -160,7 +162,7 @@ def was_previously_watched(
     with sqlite3.connect(db_path) as connection:
         row = connection.execute(
             "SELECT completed FROM media_state WHERE state_key = ?",
-            (mediaitem_state_key(item),),
+            (mediaitem_state_key(item, str(env.get("_watched_state_source", ""))),),
         ).fetchone()
     return bool(row and row[0])
 
@@ -168,8 +170,9 @@ def was_previously_watched(
 def _apply_manual_unwatched_item_state_db(
     connection: sqlite3.Connection,
     item: MediaItem,
+    source_server: str | None,
 ) -> None:
-    key = mediaitem_state_key(item)
+    key = mediaitem_state_key(item, source_server)
     previous = connection.execute(
         "SELECT completed FROM media_state WHERE state_key = ?", (key,)
     ).fetchone()
@@ -210,6 +213,7 @@ def _apply_manual_unwatched_item_state_db(
 def apply_manual_unwatched_state(
     watched_list: dict[str, UserData],
     env: dict[str, str | float | None],
+    source_server: str | None = None,
 ) -> dict[str, UserData]:
     db_path = initialize_watched_state_db(env)
 
@@ -217,11 +221,15 @@ def apply_manual_unwatched_state(
         for user_data in watched_list.values():
             for library_data in user_data.libraries.values():
                 for movie in library_data.movies:
-                    _apply_manual_unwatched_item_state_db(connection, movie)
+                    _apply_manual_unwatched_item_state_db(
+                        connection, movie, source_server
+                    )
 
                 for series in library_data.series:
                     for episode in series.episodes:
-                        _apply_manual_unwatched_item_state_db(connection, episode)
+                        _apply_manual_unwatched_item_state_db(
+                            connection, episode, source_server
+                        )
 
     return watched_list
 

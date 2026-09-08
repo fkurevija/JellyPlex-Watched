@@ -216,16 +216,22 @@ def main_loop(env: dict[str, str | float | None]) -> None:
 
             logger.info("Creating watched lists")
             initialize_watched_state_db(env)
+            env["_watched_state_source"] = server_1.server_type
             server_1_watched = server_1.get_watched(
                 server_1_users, server_1_libraries, server_1_watched
             )
             logger.info("Finished creating watched list server 1")
 
+            env["_watched_state_source"] = server_2.server_type
             server_2_watched = server_2.get_watched(server_2_users, server_2_libraries)
             logger.info("Finished creating watched list server 2")
 
-            server_1_watched = apply_manual_unwatched_state(server_1_watched, env)
-            server_2_watched = apply_manual_unwatched_state(server_2_watched, env)
+            server_1_watched = apply_manual_unwatched_state(
+                server_1_watched, env, server_1.server_type
+            )
+            server_2_watched = apply_manual_unwatched_state(
+                server_2_watched, env, server_2.server_type
+            )
 
             logger.info("Cleaning Server 1 Watched")
             server_1_watched_filtered = cleanup_watched(
