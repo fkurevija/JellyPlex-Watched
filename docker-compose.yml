@@ -2,7 +2,7 @@
 
 services:
   jellyplex-watched:
-    image: luigi311/jellyplex-watched:latest
+    image: fkurevija/jellyplex-watched:latest
     container_name: jellyplex-watched
     restart: unless-stopped
     environment:

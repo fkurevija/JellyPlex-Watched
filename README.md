@@ -83,7 +83,7 @@ Full list of configuration options can be found in the [.env.sample](.env.sample
 - or use pre-built image
 
   ```bash
-  docker pull luigi311/jellyplex-watched:latest
+  docker pull fkurevija/jellyplex-watched:latest
   ```
 
 #### With variables
@@ -91,7 +91,7 @@ Full list of configuration options can be found in the [.env.sample](.env.sample
 - Run
 
   ```bash
-  docker run --rm -it -e PLEX_TOKEN='SuperSecretToken' luigi311/jellyplex-watched:latest
+  docker run --rm -it -e PLEX_TOKEN='SuperSecretToken' fkurevija/jellyplex-watched:latest
   ```
 
 #### With .env
@@ -101,7 +101,7 @@ Full list of configuration options can be found in the [.env.sample](.env.sample
 - Run
 
   ```bash
-   docker run --rm -it -v "$(pwd)/.env:/app/.env" luigi311/jellyplex-watched:latest
+   docker run --rm -it -v "$(pwd)/.env:/app/.env" fkurevija/jellyplex-watched:latest
   ```
 
 ## Troubleshooting/Issues
