@@ -152,6 +152,19 @@ def initialize_watched_state_db(
     return db_path
 
 
+def was_previously_watched(
+    item: MediaItem,
+    env: dict[str, str | float | None],
+) -> bool:
+    db_path = initialize_watched_state_db(env)
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT completed FROM media_state WHERE state_key = ?",
+            (mediaitem_state_key(item),),
+        ).fetchone()
+    return bool(row and row[0])
+
+
 def _apply_manual_unwatched_item_state_db(
     connection: sqlite3.Connection,
     item: MediaItem,

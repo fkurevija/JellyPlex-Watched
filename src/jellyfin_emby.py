@@ -23,6 +23,7 @@ from src.watched import (
     Series,
     UserData,
     check_same_identifiers,
+    was_previously_watched,
 )
 
 
@@ -319,23 +320,14 @@ class JellyfinEmby:
             # Movies
             if library_type == "movies":
                 movie_items = []
-                watched_items = self.query(
+                movie_items_response = self.query(
                     f"/Users/{user_id}/Items"
-                    + f"?ParentId={library_id}&Filters=IsPlayed&IncludeItemTypes=Movie&Recursive=True&Fields=ItemCounts,ProviderIds,Path,UserDataLastPlayedDate",
+                    + f"?ParentId={library_id}&IncludeItemTypes=Movie&Recursive=True&Fields=ItemCounts,ProviderIds,Path,UserDataLastPlayedDate",
                     "get",
                 )
 
-                if watched_items and isinstance(watched_items, dict):
-                    movie_items += watched_items.get("Items", [])
-
-                in_progress_items = self.query(
-                    f"/Users/{user_id}/Items"
-                    + f"?ParentId={library_id}&Filters=IsResumable&IncludeItemTypes=Movie&Recursive=True&Fields=ItemCounts,ProviderIds,Path,UserDataLastPlayedDate",
-                    "get",
-                )
-
-                if in_progress_items and isinstance(in_progress_items, dict):
-                    movie_items += in_progress_items.get("Items", [])
+                if movie_items_response and isinstance(movie_items_response, dict):
+                    movie_items += movie_items_response.get("Items", [])
 
                 for movie in movie_items:
                     # Skip if theres no user data which means the movie has not been watched
@@ -346,19 +338,18 @@ class JellyfinEmby:
                     if not movie.get("MediaSources") and not movie.get("Path"):
                         continue
 
-                    # Skip if not watched or watched less than a minute
+                    movie_item = get_mediaitem(
+                        self.server_type,
+                        movie,
+                        self.generate_guids,
+                        self.generate_locations,
+                    )
                     if (
-                        movie["UserData"].get("Played")
-                        or movie["UserData"].get("PlaybackPositionTicks", 0) > 600000000
+                        movie_item.status.completed
+                        or movie_item.status.time > 60000
+                        or was_previously_watched(movie_item, self.env)
                     ):
-                        watched.movies.append(
-                            get_mediaitem(
-                                self.server_type,
-                                movie,
-                                self.generate_guids,
-                                self.generate_locations,
-                            )
-                        )
+                        watched.movies.append(movie_item)
 
             # TV Shows
             if library_type == "tvshows":
@@ -375,51 +366,8 @@ class JellyfinEmby:
                     )
                     return watched
 
-                # Fetch series IDs that have resumable (partially watched) episodes
-                resumable_episodes = self.query(
-                    f"/Users/{user_id}/Items"
-                    + f"?ParentId={library_id}&Filters=IsResumable&IncludeItemTypes=Episode&Recursive=True&Fields=SeriesId",
-                    "get",
-                )
-                resumable_series_ids = set()
-                if resumable_episodes and isinstance(resumable_episodes, dict):
-                    for ep in resumable_episodes.get("Items", []):
-                        series_id = ep.get("SeriesId")
-                        if series_id:
-                            resumable_series_ids.add(series_id)
-
-                # Filter the list of shows to only include those that have been partially or fully watched
-                watched_shows_filtered = []
+                # Retrieve watched, partially watched, and previously tracked episodes.
                 for show in all_shows.get("Items", []):
-                    if not show.get("UserData"):
-                        continue
-
-                    # Include shows with resumable episodes even if none are fully played
-                    if show.get("Id") in resumable_series_ids:
-                        watched_shows_filtered.append(show)
-                        continue
-
-                    played_percentage = show["UserData"].get("PlayedPercentage")
-                    if played_percentage is None:
-                        # Emby no longer shows PlayedPercentage
-                        total_episodes = show.get("RecursiveItemCount")
-                        unplayed_episodes = show["UserData"].get("UnplayedItemCount")
-
-                        if total_episodes is None:
-                            # Failed to get total count of episodes
-                            continue
-
-                        if (
-                            unplayed_episodes is not None
-                            and unplayed_episodes < total_episodes
-                        ):
-                            watched_shows_filtered.append(show)
-                    else:
-                        if played_percentage > 0:
-                            watched_shows_filtered.append(show)
-
-                # Retrieve the watched/partially watched list of episodes of each watched show
-                for show in watched_shows_filtered:
                     show_name = show.get("Name")
                     show_guids = {
                         k.lower(): v for k, v in show.get("ProviderIds", {}).items()
@@ -452,20 +400,18 @@ class JellyfinEmby:
                         if not episode.get("MediaSources") and not episode.get("Path"):
                             continue
 
-                        # If watched or watched more than a minute
+                        episode_item = get_mediaitem(
+                            self.server_type,
+                            episode,
+                            self.generate_guids,
+                            self.generate_locations,
+                        )
                         if (
-                            episode["UserData"].get("Played")
-                            or episode["UserData"].get("PlaybackPositionTicks", 0)
-                            > 600000000
+                            episode_item.status.completed
+                            or episode_item.status.time > 60000
+                            or was_previously_watched(episode_item, self.env)
                         ):
-                            episode_mediaitem.append(
-                                get_mediaitem(
-                                    self.server_type,
-                                    episode,
-                                    self.generate_guids,
-                                    self.generate_locations,
-                                )
-                            )
+                            episode_mediaitem.append(episode_item)
 
                     if episode_mediaitem:
                         watched.series.append(

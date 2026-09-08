@@ -27,6 +27,7 @@ from src.watched import (
     Series,
     UserData,
     check_same_identifiers,
+    was_previously_watched,
 )
 
 
@@ -241,10 +242,20 @@ class Plex:
             library_videos = user_plex.library.section(library.title)
 
             if library.type == "movie":
-                for video in library_videos.search(
-                    unwatched=False
-                ) + library_videos.search(inProgress=True):
-                    if video.isWatched or video.viewOffset >= 60000:
+                for video in library_videos.search():
+                    if (
+                        video.isWatched
+                        or video.viewOffset >= 60000
+                        or was_previously_watched(
+                            get_mediaitem(
+                                video,
+                                video.isWatched,
+                                self.generate_guids,
+                                self.generate_locations,
+                            ),
+                            self.env,
+                        )
+                    ):
                         watched.movies.append(
                             get_mediaitem(
                                 video,
@@ -257,9 +268,7 @@ class Plex:
             elif library.type == "show":
                 # Keep track of processed shows to reduce duplicate shows
                 processed_shows = []
-                for show in library_videos.search(
-                    unwatched=False
-                ) + library_videos.search(inProgress=True):
+                for show in library_videos.search():
                     if show.key in processed_shows:
                         continue
                     processed_shows.append(show.key)
@@ -267,17 +276,19 @@ class Plex:
                     episode_mediaitem = []
 
                     # Fetch watched or partially watched episodes
-                    for episode in show.watched() + show.episodes(
-                        viewOffset__gte=60_000
-                    ):
-                        episode_mediaitem.append(
-                            get_mediaitem(
-                                episode,
-                                episode.isWatched,
-                                self.generate_guids,
-                                self.generate_locations,
-                            )
+                    for episode in show.episodes():
+                        episode_item = get_mediaitem(
+                            episode,
+                            episode.isWatched,
+                            self.generate_guids,
+                            self.generate_locations,
                         )
+                        if (
+                            episode.isWatched
+                            or episode.viewOffset >= 60_000
+                            or was_previously_watched(episode_item, self.env)
+                        ):
+                            episode_mediaitem.append(episode_item)
 
                     if episode_mediaitem:
                         watched.series.append(

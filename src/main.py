@@ -22,6 +22,7 @@ from src.users import setup_users
 from src.watched import (
     apply_manual_unwatched_state,
     cleanup_watched,
+    initialize_watched_state_db,
     merge_server_watched,
 )
 
@@ -214,6 +215,7 @@ def main_loop(env: dict[str, str | float | None]) -> None:
             logger.info(f"Server 2 syncing libraries: {server_2_libraries}")
 
             logger.info("Creating watched lists")
+            initialize_watched_state_db(env)
             server_1_watched = server_1.get_watched(
                 server_1_users, server_1_libraries, server_1_watched
             )
