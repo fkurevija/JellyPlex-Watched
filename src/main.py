@@ -20,6 +20,7 @@ from src.library import setup_libraries
 from src.plex import Plex
 from src.users import setup_users
 from src.watched import (
+    apply_manual_unwatched_state,
     cleanup_watched,
     merge_server_watched,
 )
@@ -220,6 +221,9 @@ def main_loop(env: dict[str, str | float | None]) -> None:
 
             server_2_watched = server_2.get_watched(server_2_users, server_2_libraries)
             logger.info("Finished creating watched list server 2")
+
+            server_1_watched = apply_manual_unwatched_state(server_1_watched, env)
+            server_2_watched = apply_manual_unwatched_state(server_2_watched, env)
 
             logger.info("Cleaning Server 1 Watched")
             server_1_watched_filtered = cleanup_watched(

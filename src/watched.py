@@ -1,5 +1,8 @@
 import copy
-from datetime import datetime
+import json
+import os
+import sqlite3
+from datetime import datetime, timezone
 from enum import IntEnum
 from pydantic import BaseModel, Field
 from loguru import logger
@@ -50,6 +53,164 @@ class LibraryData(BaseModel):
 
 class UserData(BaseModel):
     libraries: dict[str, LibraryData] = Field(default_factory=dict)
+
+
+def mediaitem_state_key(item: MediaItem) -> str:
+    payload = {
+        "title": item.identifiers.title or "",
+        "locations": list(item.identifiers.locations),
+        "imdb_id": item.identifiers.imdb_id or "",
+        "tvdb_id": item.identifiers.tvdb_id or "",
+        "tmdb_id": item.identifiers.tmdb_id or "",
+    }
+    return json.dumps(payload, sort_keys=True)
+
+
+def watched_state_db_path(env: dict[str, str | float | None] | None) -> str:
+    db_path = get_env_value(env, "WATCHED_STATE_DB", ".jellyplex-watched-state.db")
+    if not os.path.isabs(db_path):
+        db_path = os.path.join(os.getcwd(), db_path)
+    return db_path
+
+
+def legacy_watched_state_path(env: dict[str, str | float | None] | None) -> str:
+    state_path = get_env_value(env, "WATCHED_STATE_FILE", ".jellyplex-watched-state.json")
+    if not os.path.isabs(state_path):
+        state_path = os.path.join(os.getcwd(), state_path)
+    return state_path
+
+
+def initialize_watched_state_db(
+    env: dict[str, str | float | None] | None,
+) -> str:
+    db_path = watched_state_db_path(env)
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS media_state (
+                state_key TEXT PRIMARY KEY,
+                completed INTEGER NOT NULL,
+                resume_ms INTEGER NOT NULL,
+                viewed_date TEXT NOT NULL,
+                manual_unwatched_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+
+        migrated = connection.execute(
+            "SELECT 1 FROM metadata WHERE key = 'json_migrated'"
+        ).fetchone()
+        legacy_path = legacy_watched_state_path(env)
+        if migrated is None and os.path.exists(legacy_path):
+            try:
+                with open(legacy_path, "r", encoding="utf-8") as state_file:
+                    legacy_state = json.load(state_file)
+                if not isinstance(legacy_state, dict):
+                    raise ValueError("legacy state is not a JSON object")
+
+                for state_key, state in legacy_state.items():
+                    if not isinstance(state, dict):
+                        continue
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO media_state
+                        (state_key, completed, resume_ms, viewed_date, manual_unwatched_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            state_key,
+                            int(bool(state.get("completed", False))),
+                            int(state.get("time", 0)),
+                            str(
+                                state.get(
+                                    "viewed_date",
+                                    datetime.now(timezone.utc).isoformat(),
+                                )
+                            ),
+                            state.get("manual_unwatched_at"),
+                        ),
+                    )
+                logger.info(f"Migrated watched state from {legacy_path} to {db_path}")
+                connection.execute(
+                    "INSERT INTO metadata (key, value) VALUES ('json_migrated', 'true')"
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+                logger.warning(
+                    f"Failed to migrate watched state from {legacy_path}: {error}"
+                )
+
+    return db_path
+
+
+def _apply_manual_unwatched_item_state_db(
+    connection: sqlite3.Connection,
+    item: MediaItem,
+) -> None:
+    key = mediaitem_state_key(item)
+    previous = connection.execute(
+        "SELECT completed FROM media_state WHERE state_key = ?", (key,)
+    ).fetchone()
+    now = datetime.now(timezone.utc)
+    manual_unwatched_at = None
+
+    if (
+        previous
+        and bool(previous[0])
+        and not item.status.completed
+        and item.status.time <= 10_000
+    ):
+        item.status.viewed_date = now
+        item.status.time = 0
+        manual_unwatched_at = now.isoformat()
+
+    connection.execute(
+        """
+        INSERT INTO media_state
+        (state_key, completed, resume_ms, viewed_date, manual_unwatched_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(state_key) DO UPDATE SET
+            completed = excluded.completed,
+            resume_ms = excluded.resume_ms,
+            viewed_date = excluded.viewed_date,
+            manual_unwatched_at = excluded.manual_unwatched_at
+        """,
+        (
+            key,
+            int(item.status.completed),
+            item.status.time,
+            item.status.viewed_date.isoformat(),
+            manual_unwatched_at,
+        ),
+    )
+
+
+def apply_manual_unwatched_state(
+    watched_list: dict[str, UserData],
+    env: dict[str, str | float | None],
+) -> dict[str, UserData]:
+    db_path = initialize_watched_state_db(env)
+
+    with sqlite3.connect(db_path) as connection:
+        for user_data in watched_list.values():
+            for library_data in user_data.libraries.values():
+                for movie in library_data.movies:
+                    _apply_manual_unwatched_item_state_db(connection, movie)
+
+                for series in library_data.series:
+                    for episode in series.episodes:
+                        _apply_manual_unwatched_item_state_db(connection, episode)
+
+    return watched_list
 
 
 def compare_media_items(

@@ -8,6 +8,11 @@ Sync watched between jellyfin, plex and emby locally
 
 Keep in sync all your users watched history between jellyfin, plex and emby servers locally. This uses file names and provider ids to find the correct episode/movie between the two. This is not perfect but it works for most cases. You can use this for as many servers as you want by entering multiple options in the .env plex/jellyfin section separated by commas.
 
+Watched-state history is stored in SQLite at `WATCHED_STATE_DB` (default:
+`.jellyplex-watched-state.db`). If the previous JSON state file exists at
+`WATCHED_STATE_FILE`, it is migrated automatically the first time the SQLite
+database is initialized.
+
 ## Features
 
 ### Plex

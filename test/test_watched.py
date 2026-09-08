@@ -1,4 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
+import json
+import sqlite3
 import sys
 import os
 
@@ -21,7 +23,10 @@ from src.watched import (
     Series,
     UserData,
     WatchedStatus,
+    apply_manual_unwatched_state,
     cleanup_watched,
+    initialize_watched_state_db,
+    mediaitem_state_key,
 )
 
 viewed_date = datetime.today()
@@ -676,6 +681,57 @@ def test_simple_cleanup_watched():
 
     assert return_watched_list_1 == expected_watched_list_1
     assert return_watched_list_2 == expected_watched_list_2
+
+
+def test_json_state_is_migrated_and_unwatched_transition_is_persisted(tmp_path):
+    item = MediaItem(
+        identifiers=MediaIdentifiers(
+            title="Migrated Item",
+            locations=("Migrated Item.mkv",),
+            imdb_id="tt7654321",
+        ),
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    json_path = tmp_path / "watched.json"
+    db_path = tmp_path / "watched.db"
+    json_path.write_text(
+        json.dumps(
+            {
+                mediaitem_state_key(item): {
+                    "completed": True,
+                    "time": 0,
+                    "viewed_date": "2024-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = {
+        "WATCHED_STATE_DB": str(db_path),
+        "WATCHED_STATE_FILE": str(json_path),
+    }
+    watched = {
+        "user": UserData(
+            libraries={
+                "Movies": LibraryData(title="Movies", movies=[item]),
+            }
+        )
+    }
+
+    apply_manual_unwatched_state(watched, env)
+
+    assert item.status.time == 0
+    assert item.status.viewed_date > datetime(2024, 1, 1, tzinfo=timezone.utc)
+    with sqlite3.connect(initialize_watched_state_db(env)) as connection:
+        row = connection.execute(
+            "SELECT completed, resume_ms, manual_unwatched_at FROM media_state"
+        ).fetchone()
+    assert row == (0, 0, item.status.viewed_date.isoformat())
 
 
 # def test_mapping_cleanup_watched():
