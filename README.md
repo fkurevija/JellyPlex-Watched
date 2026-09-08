@@ -2,6 +2,8 @@
 
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/26b47c5db63942f28f02f207f692dc85)](https://www.codacy.com/gh/luigi311/JellyPlex-Watched/dashboard?utm_source=github.com&utm_medium=referral&utm_content=luigi311/JellyPlex-Watched&utm_campaign=Badge_Grade)
 
+> This repository is a personal fork of [luigi311/JellyPlex-Watched](https://github.com/luigi311/JellyPlex-Watched). It is maintained for my own use while I implement synchronization of unwatched states between media servers. Changes may differ from the original project and are not intended to represent the upstream project.
+
 Sync watched between jellyfin, plex and emby locally
 
 ## Description
