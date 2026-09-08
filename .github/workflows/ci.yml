@@ -70,6 +70,7 @@ jobs:
 
       - name: "Test Plex"
         run: |
+          rm -f .jellyplex-watched-state.db .jellyplex-watched-state.db-*
           ENV_FILE="test/ci_plex.env" uv run main.py
           uv run test/validate_ci_marklog.py --plex
           
@@ -77,6 +78,7 @@ jobs:
           
       - name: "Test Jellyfin"
         run: |
+          rm -f .jellyplex-watched-state.db .jellyplex-watched-state.db-*
           ENV_FILE="test/ci_jellyfin.env" uv run main.py
           uv run test/validate_ci_marklog.py --jellyfin
           
@@ -84,6 +86,7 @@ jobs:
 
       - name: "Test Emby"
         run: |
+          rm -f .jellyplex-watched-state.db .jellyplex-watched-state.db-*
           ENV_FILE="test/ci_emby.env" uv run main.py
           uv run test/validate_ci_marklog.py --emby
           
@@ -91,6 +94,7 @@ jobs:
 
       - name: "Test Guids"
         run: |
+          rm -f .jellyplex-watched-state.db .jellyplex-watched-state.db-*
           ENV_FILE="test/ci_guids.env" uv run main.py
           uv run test/validate_ci_marklog.py --guids
           
@@ -98,6 +102,7 @@ jobs:
 
       - name: "Test Locations"
         run: |
+          rm -f .jellyplex-watched-state.db .jellyplex-watched-state.db-*
           ENV_FILE="test/ci_locations.env" uv run main.py
           uv run test/validate_ci_marklog.py --locations
           
@@ -105,6 +110,7 @@ jobs:
 
       - name: "Test writing to the servers"
         run: |
+          rm -f .jellyplex-watched-state.db .jellyplex-watched-state.db-*
           # Test writing to the servers
           ENV_FILE="test/ci_write.env" uv run main.py
 
