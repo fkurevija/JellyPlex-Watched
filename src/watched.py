@@ -958,6 +958,21 @@ def check_remove_entry(
     if jellyfin_source_dryrun and item1.status.completed:
         return False
 
+    # Apply the same source retention rule to Emby-originated dry-runs. This
+    # keeps completed Emby states available for both enabled destinations when
+    # cleanup encounters an equal or synthetic destination record.
+    emby_source_dryrun = (
+        get_env_value(env, "DRYRUN", "False") in (True, "True", "true", 1)
+        and (
+            get_env_value(env, "SYNC_FROM_EMBY_TO_PLEX", "False")
+            in (True, "True", "true", 1)
+            or get_env_value(env, "SYNC_FROM_EMBY_TO_JELLYFIN", "False")
+            in (True, "True", "true", 1)
+        )
+    )
+    if emby_source_dryrun and item1.status.completed:
+        return False
+
     # Removal policy for cleanup: drop item1 if item2 is as-good-or-better.
     return compare_media_items(item1, item2, env) in (Ord.B_BETTER, Ord.TIE)
 

@@ -970,6 +970,34 @@ def test_jellyfin_dryrun_keeps_completed_source_state():
     assert not check_remove_entry(source_item, destination_item, env)
 
 
+def test_emby_dryrun_keeps_completed_source_state():
+    identifiers = MediaIdentifiers(
+        title="The Way Out", locations=("S01E05.mkv",), tvdb_id="10009420"
+    )
+    source_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    destination_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 2, tzinfo=timezone.utc),
+        ),
+    )
+    env = {
+        "DRYRUN": "True",
+        "SYNC_FROM_EMBY_TO_JELLYFIN": "True",
+    }
+
+    assert not check_remove_entry(source_item, destination_item, env)
+
+
 def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
     identifiers = MediaIdentifiers(
         title="Propagated Reset",
