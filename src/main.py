@@ -234,6 +234,7 @@ def main_loop(env: dict[str, str | float | None]) -> None:
                 state_index_cache[server_1.server_type] = load_state_index(
                     env, server_1.server_type
                 )
+            server_1_snapshot_cached = server_1_key in snapshot_cache
             if server_1_key not in snapshot_cache:
                 env["_watched_state_index"] = state_index_cache[server_1.server_type]
                 snapshot_cache[server_1_key] = server_1.get_watched(
@@ -259,6 +260,7 @@ def main_loop(env: dict[str, str | float | None]) -> None:
                 state_index_cache[server_2.server_type] = load_state_index(
                     env, server_2.server_type
                 )
+            server_2_snapshot_cached = server_2_key in snapshot_cache
             if server_2_key not in snapshot_cache:
                 env["_watched_state_index"] = state_index_cache[server_2.server_type]
                 snapshot_cache[server_2_key] = server_2.get_watched(
@@ -269,13 +271,17 @@ def main_loop(env: dict[str, str | float | None]) -> None:
             logger.info("Finished creating watched list server 2")
 
             env["_watched_state_index"] = server_1_state_index
-            server_1_watched = apply_manual_unwatched_state(
-                server_1_watched, env, server_1.server_type
-            )
+            if not server_1_snapshot_cached:
+                server_1_watched = apply_manual_unwatched_state(
+                    server_1_watched, env, server_1.server_type
+                )
+                snapshot_cache[server_1_key] = deepcopy(server_1_watched)
             env["_watched_state_index"] = server_2_state_index
-            server_2_watched = apply_manual_unwatched_state(
-                server_2_watched, env, server_2.server_type
-            )
+            if not server_2_snapshot_cached:
+                server_2_watched = apply_manual_unwatched_state(
+                    server_2_watched, env, server_2.server_type
+                )
+                snapshot_cache[server_2_key] = deepcopy(server_2_watched)
 
             logger.info("Cleaning Server 1 Watched")
             server_1_watched_filtered = cleanup_watched(
