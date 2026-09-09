@@ -192,22 +192,10 @@ def was_previously_watched(
     item: MediaItem,
     env: dict[str, str | float | None],
 ) -> bool:
-    cached_keys = env.get("_watched_state_keys")
-    if isinstance(cached_keys, set):
-        source_server = str(env.get("_watched_state_source", ""))
-        exact_key = mediaitem_state_key(item, source_server)
-        if exact_key in cached_keys:
-            return True
-        for state_key in cached_keys:
-            try:
-                if (
-                    f'"source_server": "{source_server}"' in state_key
-                    and _identities_match(item, json.loads(state_key))
-                ):
-                    return True
-            except json.JSONDecodeError:
-                continue
-        return False
+    state_index = env.get("_watched_state_index")
+    if isinstance(state_index, dict):
+        row = _find_indexed(item, state_index)
+        return bool(row and row[1])
 
     db_path = initialize_watched_state_db(env)
     with sqlite3.connect(db_path) as connection:
@@ -237,54 +225,131 @@ def load_previously_watched_keys(
     return {row[0] for row in rows}
 
 
-def _identities_match(item: MediaItem, stored_identity: dict[str, Any]) -> bool:
-    if set(item.identifiers.locations).intersection(
-        stored_identity.get("locations", [])
-    ):
-        return True
-    for field in ("imdb_id", "tvdb_id", "tmdb_id"):
-        value = getattr(item.identifiers, field)
-        if value and value == stored_identity.get(field):
-            return True
-    return item.identifiers.title == stored_identity.get("title")
+def _identity_values(item: MediaItem) -> tuple[tuple[str, ...], str | None, str | None, str | None, str | None]:
+    identifiers = item.identifiers
+    return (
+        tuple(identifiers.locations),
+        identifiers.imdb_id,
+        identifiers.tvdb_id,
+        identifiers.tmdb_id,
+        identifiers.title,
+    )
 
 
-def _find_state_row(
-    connection: sqlite3.Connection,
-    item: MediaItem,
+def load_state_index(
+    env: dict[str, str | float | None],
     source_server: str | None,
-) -> tuple | None:
-    rows = connection.execute(
-        """
-        SELECT state_key, completed, resume_ms, state_changed_at,
-               manual_unwatched_at
-        FROM media_state
-        WHERE state_key LIKE ?
-        """,
-        (
-            f'%"source_server": "{source_server or ""}"%',
-        ),
-    ).fetchall()
-    for row in rows:
-        try:
-            if _identities_match(item, json.loads(row[0])):
-                return row
-        except json.JSONDecodeError:
-            continue
-    legacy_rows = connection.execute(
+) -> dict[str, Any]:
+    """Load and normalize all state used during one server snapshot."""
+    db_path = initialize_watched_state_db(env)
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT state_key, completed, resume_ms, state_changed_at,
+                   manual_unwatched_at
+            FROM media_state
+            WHERE state_key LIKE ?
+            """,
+            (f'%"source_server": "{source_server or ""}"%',),
+        ).fetchall()
+        rows += connection.execute(
             """
             SELECT state_key, completed, resume_ms, state_changed_at,
                    manual_unwatched_at
             FROM media_state
             WHERE state_key NOT LIKE '%"source_server":%'
             """
-    ).fetchall()
-    for row in legacy_rows:
+        ).fetchall()
+        pending_rows = connection.execute(
+            """
+            SELECT state_key, expected_completed, expected_resume_ms
+            FROM pending_sync
+            WHERE destination_server = ?
+            """,
+            (source_server or "",),
+        ).fetchall()
+
+    index: dict[str, Any] = {
+        "by_location": {},
+        "by_imdb_id": {},
+        "by_tvdb_id": {},
+        "by_tmdb_id": {},
+        "by_title": {},
+        "pending": {},
+    }
+    for row in rows:
         try:
-            if _identities_match(item, json.loads(row[0])):
-                return row
+            identity = json.loads(row[0])
         except json.JSONDecodeError:
             continue
+        normalized = (row, identity)
+        for location in identity.get("locations", []):
+            index["by_location"].setdefault(location, normalized)
+        for field, index_name in (
+            ("imdb_id", "by_imdb_id"),
+            ("tvdb_id", "by_tvdb_id"),
+            ("tmdb_id", "by_tmdb_id"),
+            ("title", "by_title"),
+        ):
+            value = identity.get(field)
+            if value:
+                index[index_name].setdefault(value, normalized)
+
+    for row in pending_rows:
+        try:
+            identity = json.loads(row[0])
+        except json.JSONDecodeError:
+            continue
+        normalized = (row, identity)
+        for location in identity.get("locations", []):
+            index["pending"].setdefault(("location", location), normalized)
+        for field in ("imdb_id", "tvdb_id", "tmdb_id", "title"):
+            value = identity.get(field)
+            if value:
+                index["pending"].setdefault((field, value), normalized)
+    return index
+
+
+def _find_indexed(
+    item: MediaItem,
+    index: dict[str, Any],
+) -> tuple | None:
+    locations, imdb_id, tvdb_id, tmdb_id, title = _identity_values(item)
+    for location in locations:
+        if location in index["by_location"]:
+            return index["by_location"][location][0]
+    for field, value in (
+        ("imdb_id", imdb_id),
+        ("tvdb_id", tvdb_id),
+        ("tmdb_id", tmdb_id),
+        ("title", title),
+    ):
+        if value and value in index[f"by_{field}"]:
+            return index[f"by_{field}"][value][0]
+    return None
+
+
+def _find_state_row(
+    connection: sqlite3.Connection,
+    item: MediaItem,
+    source_server: str | None,
+    state_index: dict[str, Any] | None = None,
+) -> tuple | None:
+    if state_index is not None:
+        return _find_indexed(item, state_index)
+    return None
+
+
+def _find_pending(index: dict[str, Any], item: MediaItem) -> tuple | None:
+    locations, imdb_id, tvdb_id, tmdb_id, title = _identity_values(item)
+    for key in [(("location", value)) for value in locations] + [
+        ("imdb_id", imdb_id),
+        ("tvdb_id", tvdb_id),
+        ("tmdb_id", tmdb_id),
+        ("title", title),
+    ]:
+        if key[1] and key in index["pending"]:
+            return index["pending"][key][0]
     return None
 
 
@@ -292,29 +357,17 @@ def _apply_manual_unwatched_item_state_db(
     connection: sqlite3.Connection,
     item: MediaItem,
     source_server: str | None,
+    state_index: dict[str, Any] | None = None,
 ) -> None:
     key = mediaitem_state_key(item, source_server)
-    previous = _find_state_row(connection, item, source_server)
+    previous = _find_state_row(connection, item, source_server, state_index)
     state_key = previous[0] if previous else key
     now = datetime.now(timezone.utc)
     manual_unwatched_at = None
-    pending = None
-    pending_key = None
-    for candidate in connection.execute(
-        """
-        SELECT state_key, expected_completed, expected_resume_ms
-        FROM pending_sync
-        WHERE destination_server = ?
-        """,
-        (source_server or "",),
-    ).fetchall():
-        try:
-            if _identities_match(item, json.loads(candidate[0])):
-                pending_key = candidate[0]
-                pending = candidate[1:]
-                break
-        except json.JSONDecodeError:
-            continue
+    pending = _find_pending(state_index, item) if state_index else None
+    pending_key = pending[0] if pending else None
+    if pending:
+        pending = pending[1:]
     pending_matches = bool(
         pending
         and bool(pending[0]) == item.status.completed
@@ -384,6 +437,10 @@ def _apply_manual_unwatched_item_state_db(
             """,
             (pending_key or mediaitem_identity_key(item), source_server or ""),
         )
+        if state_index:
+            for key_name, value in list(state_index["pending"].items()):
+                if value[0][0] == pending_key:
+                    del state_index["pending"][key_name]
 
 
 def record_pending_sync(
@@ -394,6 +451,12 @@ def record_pending_sync(
 ) -> None:
     """Record a state written by this process for destination confirmation."""
     db_path = initialize_watched_state_db(env)
+    identity_key = mediaitem_identity_key(destination_item or item)
+    expected = (
+        identity_key,
+        int(item.status.completed),
+        item.status.time,
+    )
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             """
@@ -407,13 +470,23 @@ def record_pending_sync(
                 created_at = excluded.created_at
             """,
             (
-                mediaitem_identity_key(destination_item or item),
+                identity_key,
                 destination_server,
                 int(item.status.completed),
                 item.status.time,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
+    state_index = env.get("_watched_state_index")
+    if isinstance(state_index, dict):
+        normalized = ((identity_key, expected[1], expected[2]), json.loads(identity_key))
+        identity = normalized[1]
+        for location in identity.get("locations", []):
+            state_index["pending"][("location", location)] = normalized
+        for field in ("imdb_id", "tvdb_id", "tmdb_id", "title"):
+            value = identity.get(field)
+            if value:
+                state_index["pending"][(field, value)] = normalized
 
 
 def apply_manual_unwatched_state(
@@ -422,19 +495,22 @@ def apply_manual_unwatched_state(
     source_server: str | None = None,
 ) -> dict[str, UserData]:
     db_path = initialize_watched_state_db(env)
+    state_index = env.get("_watched_state_index")
+    if not isinstance(state_index, dict):
+        state_index = load_state_index(env, source_server)
 
     with sqlite3.connect(db_path) as connection:
         for user_data in watched_list.values():
             for library_data in user_data.libraries.values():
                 for movie in library_data.movies:
                     _apply_manual_unwatched_item_state_db(
-                        connection, movie, source_server
+                        connection, movie, source_server, state_index
                     )
 
                 for series in library_data.series:
                     for episode in series.episodes:
                         _apply_manual_unwatched_item_state_db(
-                            connection, episode, source_server
+                            connection, episode, source_server, state_index
                         )
 
     return watched_list

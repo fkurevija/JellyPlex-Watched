@@ -24,7 +24,7 @@ from src.watched import (
     apply_manual_unwatched_state,
     cleanup_watched,
     initialize_watched_state_db,
-    load_previously_watched_keys,
+    load_state_index,
     merge_server_watched,
 )
 
@@ -229,12 +229,13 @@ def main_loop(env: dict[str, str | float | None]) -> None:
                 tuple(sorted(server_1_libraries)),
             )
             if server_1_key not in snapshot_cache:
-                env["_watched_state_keys"] = load_previously_watched_keys(
+                env["_watched_state_index"] = load_state_index(
                     env, server_1.server_type
                 )
                 snapshot_cache[server_1_key] = server_1.get_watched(
                     server_1_users, server_1_libraries
                 )
+            server_1_state_index = env["_watched_state_index"]
             server_1_watched = deepcopy(snapshot_cache[server_1_key])
             logger.info("Finished creating watched list server 1")
 
@@ -251,18 +252,21 @@ def main_loop(env: dict[str, str | float | None]) -> None:
                 tuple(sorted(server_2_libraries)),
             )
             if server_2_key not in snapshot_cache:
-                env["_watched_state_keys"] = load_previously_watched_keys(
+                env["_watched_state_index"] = load_state_index(
                     env, server_2.server_type
                 )
                 snapshot_cache[server_2_key] = server_2.get_watched(
                     server_2_users, server_2_libraries
                 )
+            server_2_state_index = env["_watched_state_index"]
             server_2_watched = deepcopy(snapshot_cache[server_2_key])
             logger.info("Finished creating watched list server 2")
 
+            env["_watched_state_index"] = server_1_state_index
             server_1_watched = apply_manual_unwatched_state(
                 server_1_watched, env, server_1.server_type
             )
+            env["_watched_state_index"] = server_2_state_index
             server_2_watched = apply_manual_unwatched_state(
                 server_2_watched, env, server_2.server_type
             )
