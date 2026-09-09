@@ -633,16 +633,6 @@ class JellyfinEmby:
                                     )
 
                                 logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
-                                log_marked(
-                                    self.server_type,
-                                    self.server_name,
-                                    user_name,
-                                    library_name,
-                                    jellyfin_video.get("Name"),
-                                    mark_file=get_env_value(
-                                        self.env, "MARK_FILE", "mark.log"
-                                    ),
-                                )
                             elif self.update_partial:
                                 current_data = jellyfin_video.get("UserData") or {}
                                 if (
@@ -858,17 +848,6 @@ class JellyfinEmby:
 
                                             logger.success(
                                                 f"{'[DRYRUN] ' if dryrun else ''}{msg}"
-                                            )
-                                            log_marked(
-                                                self.server_type,
-                                                self.server_name,
-                                                user_name,
-                                                library_name,
-                                                jellyfin_episode.get("SeriesName"),
-                                                jellyfin_episode.get("Name"),
-                                                mark_file=get_env_value(
-                                                    self.env, "MARK_FILE", "mark.log"
-                                                ),
                                             )
                                         elif self.update_partial:
                                             current_data = jellyfin_episode.get("UserData") or {}

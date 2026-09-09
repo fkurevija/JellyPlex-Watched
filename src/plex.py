@@ -436,8 +436,6 @@ class Plex:
                                 user.title,
                                 library_name,
                                 plex_movie.title,
-                                None,
-                                None,
                                 mark_file=get_env_value(
                                     self.env, "MARK_FILE", "mark.log"
                                 ),
@@ -469,16 +467,6 @@ class Plex:
                                     continue
 
                             logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
-                            log_marked(
-                                "Plex",
-                                user_plex.friendlyName,
-                                user.title,
-                                library_name,
-                                plex_movie.title,
-                                mark_file=get_env_value(
-                                    self.env, "MARK_FILE", "mark.log"
-                                ),
-                            )
                         else:
                             if (
                                 not plex_movie.isWatched
@@ -619,17 +607,6 @@ class Plex:
 
                                         logger.success(
                                             f"{'[DRYRUN] ' if dryrun else ''}{msg}"
-                                        )
-                                        log_marked(
-                                            "Plex",
-                                            user_plex.friendlyName,
-                                            user.title,
-                                            library_name,
-                                            plex_show.title,
-                                            plex_episode.title,
-                                            mark_file=get_env_value(
-                                                self.env, "MARK_FILE", "mark.log"
-                                            ),
                                         )
                                     else:
                                         if (
