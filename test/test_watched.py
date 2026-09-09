@@ -883,6 +883,29 @@ def test_unknown_zero_progress_item_does_not_remove_real_state():
     assert not check_remove_entry(real_state, unknown_state, {})
 
 
+def test_unconfirmed_manual_flag_does_not_remove_real_state():
+    identifiers = MediaIdentifiers(title="Unconfirmed Manual Flag")
+    real_state = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    synthetic_state = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+            manually_unwatched=True,
+        ),
+    )
+
+    assert not check_remove_entry(real_state, synthetic_state, {})
+
+
 def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
     identifiers = MediaIdentifiers(
         title="Propagated Reset",

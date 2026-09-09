@@ -34,6 +34,7 @@ class WatchedStatus(BaseModel):
     time: int
     viewed_date: datetime
     manually_unwatched: bool = False
+    manual_unwatched_at: datetime | None = None
 
 
 class MediaItem(BaseModel):
@@ -525,6 +526,7 @@ def _apply_manual_unwatched_item_state_db(
     ):
         item.status.time = 0
         item.status.manually_unwatched = True
+        item.status.manual_unwatched_at = now
 
     if (
         previous
@@ -536,6 +538,7 @@ def _apply_manual_unwatched_item_state_db(
         item.status.viewed_date = now
         item.status.time = 0
         item.status.manually_unwatched = True
+        item.status.manual_unwatched_at = now
         manual_unwatched_at = now.isoformat()
     elif item.status.manually_unwatched:
         manual_unwatched_at = previous[4] if previous else now.isoformat()
@@ -907,7 +910,7 @@ def check_remove_entry(
     # state from the other server.
     if (
         not item2.status.completed
-        and not item2.status.manually_unwatched
+        and item2.status.manual_unwatched_at is None
         and item2.status.time <= 60_000
     ):
         return False
