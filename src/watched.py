@@ -377,13 +377,11 @@ def compare_media_items(
         to_aware_utc(media2.status.viewed_date),
     )
 
-    # A manual unwatched transition wins over stale partial progress, but a
-    # newer explicit watched state must be allowed to restore the item.
+    # A manual unwatched transition is an explicit user action and must win
+    # over stale watched or partial-progress state. A watched state restored
+    # by the user is propagated through pending_sync and is not marked as a
+    # manual-unwatched transition, so it can still become the new baseline.
     if media1.status.manually_unwatched != media2.status.manually_unwatched:
-        if media1.status.manually_unwatched and media2.status.completed:
-            return Ord.B_BETTER
-        if media2.status.manually_unwatched and media1.status.completed:
-            return Ord.A_BETTER
         return (
             Ord.A_BETTER
             if media1.status.manually_unwatched

@@ -817,6 +817,17 @@ def test_manual_unwatched_state_wins_over_partial_progress():
     assert compare_media_items(unwatched_item, partial_item, {}) == Ord.A_BETTER
     assert compare_media_items(partial_item, unwatched_item, {}) == Ord.B_BETTER
 
+    completed_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    assert compare_media_items(unwatched_item, completed_item, {}) == Ord.A_BETTER
+    assert compare_media_items(completed_item, unwatched_item, {}) == Ord.B_BETTER
+
 
 def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
     identifiers = MediaIdentifiers(
