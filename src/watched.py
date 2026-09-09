@@ -262,6 +262,16 @@ def load_state_index(
             WHERE state_key NOT LIKE '%"source_server":%'
             """
         ).fetchall()
+        rows += connection.execute(
+            """
+            SELECT state_key, completed, resume_ms, state_changed_at,
+                   manual_unwatched_at
+            FROM media_state
+            WHERE state_key LIKE '%"source_server":%'
+              AND state_key NOT LIKE ?
+            """,
+            (f'%"source_server": "{source_server or ""}"%',),
+        ).fetchall()
         pending_rows = connection.execute(
             """
             SELECT state_key, expected_completed, expected_resume_ms

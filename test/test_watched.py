@@ -1089,6 +1089,32 @@ def test_tracked_unwatched_state_remains_collectable(tmp_path):
     assert was_previously_watched(item, env)
 
 
+def test_cross_server_state_remains_collectable_for_unwatched_transition(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Cross Server Item",
+        locations=("cross-server-item.mkv",),
+        imdb_id="tt7654331",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = watched_item.model_copy(deep=True)
+    unwatched_item.status.completed = False
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[watched_item])})},
+        env,
+        "Plex",
+    )
+    env["_watched_state_index"] = load_state_index(env, "Jellyfin")
+
+    assert was_previously_watched(unwatched_item, env)
+
+
 def test_source_exact_state_precedes_flexible_identity_match(tmp_path):
     identifiers = MediaIdentifiers(
         title="Exact Source Item",
