@@ -24,6 +24,7 @@ from src.watched import (
     UserData,
     WatchedStatus,
     apply_manual_unwatched_state,
+    check_remove_entry,
     cleanup_watched,
     compare_media_items,
     initialize_watched_state_db,
@@ -858,6 +859,28 @@ def test_completed_state_beats_newer_unknown_incomplete_state():
         compare_media_items(unknown_incomplete_item, completed_item, {})
         == Ord.B_BETTER
     )
+
+
+def test_unknown_zero_progress_item_does_not_remove_real_state():
+    identifiers = MediaIdentifiers(title="Unknown Cleanup Item")
+    real_state = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    unknown_state = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+
+    assert not check_remove_entry(real_state, unknown_state, {})
 
 
 def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):

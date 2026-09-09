@@ -898,6 +898,17 @@ def check_remove_entry(
     if not check_same_identifiers(item1.identifiers, item2.identifiers):
         return False
 
+    # Services commonly return never-played items as incomplete with a
+    # synthetic current timestamp. Without an explicit manual-unwatched
+    # transition, that observation must not remove a real watched or partial
+    # state from the other server.
+    if (
+        not item2.status.completed
+        and not item2.status.manually_unwatched
+        and item2.status.time <= 60_000
+    ):
+        return False
+
     # Removal policy for cleanup: drop item1 if item2 is as-good-or-better.
     return compare_media_items(item1, item2, env) in (Ord.B_BETTER, Ord.TIE)
 
