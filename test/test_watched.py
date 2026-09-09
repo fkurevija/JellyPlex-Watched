@@ -920,6 +920,30 @@ def test_dryrun_keeps_equal_state_for_mark_logging():
     assert not check_remove_entry(item, item.model_copy(deep=True), {"DRYRUN": "True"})
 
 
+def test_unknown_zero_progress_source_loses_to_meaningful_state():
+    identifiers = MediaIdentifiers(
+        title="Unknown Source Item", locations=("unknown-source-item.mkv",)
+    )
+    unknown_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    partial_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=420_000,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert check_remove_entry(unknown_item, partial_item, {})
+
+
 def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
     identifiers = MediaIdentifiers(
         title="Propagated Reset",

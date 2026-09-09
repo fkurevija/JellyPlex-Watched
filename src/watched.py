@@ -915,6 +915,17 @@ def check_remove_entry(
     ):
         return False
 
+    # A fresh zero-progress observation is not an authoritative state. If
+    # item2 has meaningful progress, remove the unknown item1 candidate
+    # instead of letting its synthetic current timestamp win the comparison.
+    if (
+        not item1.status.completed
+        and item1.status.manual_unwatched_at is None
+        and item1.status.time <= 60_000
+        and (item2.status.completed or item2.status.time > 60_000)
+    ):
+        return True
+
     # Plex CI dry-runs validate the complete Plex source mark list, including
     # items that already match on the destination. Other dry-run scenarios
     # must still suppress equal states to avoid duplicate reverse-direction
