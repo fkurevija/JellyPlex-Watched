@@ -46,10 +46,18 @@ jobs:
         with:
           python-version-file: ".python-version"
 
+      - name: "Clear APT cache and update"
+        run: |
+          sudo rm -rf /var/lib/apt/lists/*
+          for i in {1..3}; do
+            sudo apt-get update && break
+            if [ $i -lt 3 ]; then sleep 5; fi
+          done
+
       - name: "Install dependencies"
         run: |
           uv sync --frozen
-          sudo apt update && sudo apt install -y docker-compose
+          sudo apt install -y docker-compose
 
       - name: "Checkout JellyPlex-Watched-CI"
         uses: actions/checkout@v5
