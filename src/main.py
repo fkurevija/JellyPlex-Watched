@@ -178,6 +178,7 @@ def main_loop(env: dict[str, str | float | None]) -> None:
     # Create server connections
     logger.info("Creating server connections")
     servers = generate_server_connections(env)
+    snapshot_cache: dict[tuple[int, tuple[str, ...], tuple[str, ...]], dict] = {}
     state_index_cache: dict[str, dict] = {}
     env["_watched_state_indexes"] = state_index_cache
 
@@ -218,29 +219,53 @@ def main_loop(env: dict[str, str | float | None]) -> None:
             logger.info("Creating watched lists")
             initialize_watched_state_db(env)
             env["_watched_state_source"] = server_1.server_type
+            server_1_user_key = tuple(
+                sorted(
+                    user.username.lower() if hasattr(user, "username") else str(user).lower()
+                    for user in server_1_users
+                )
+            )
+            server_1_key = (
+                id(server_1),
+                server_1_user_key,
+                tuple(sorted(server_1_libraries)),
+            )
             if server_1.server_type not in state_index_cache:
                 state_index_cache[server_1.server_type] = load_state_index(
                     env, server_1.server_type
                 )
-            env["_watched_state_index"] = state_index_cache[server_1.server_type]
-            server_1_snapshot = server_1.get_watched(
-                server_1_users, server_1_libraries
-            )
+            if server_1_key not in snapshot_cache:
+                env["_watched_state_index"] = state_index_cache[server_1.server_type]
+                snapshot_cache[server_1_key] = server_1.get_watched(
+                    server_1_users, server_1_libraries
+                )
             server_1_state_index = state_index_cache[server_1.server_type]
-            server_1_watched = deepcopy(server_1_snapshot)
+            server_1_watched = deepcopy(snapshot_cache[server_1_key])
             logger.info("Finished creating watched list server 1")
 
             env["_watched_state_source"] = server_2.server_type
+            server_2_user_key = tuple(
+                sorted(
+                    user.lower() if isinstance(user, str) else str(user).lower()
+                    for user in server_2_users
+                )
+            )
+            server_2_key = (
+                id(server_2),
+                server_2_user_key,
+                tuple(sorted(server_2_libraries)),
+            )
             if server_2.server_type not in state_index_cache:
                 state_index_cache[server_2.server_type] = load_state_index(
                     env, server_2.server_type
                 )
-            env["_watched_state_index"] = state_index_cache[server_2.server_type]
-            server_2_snapshot = server_2.get_watched(
-                server_2_users, server_2_libraries
-            )
+            if server_2_key not in snapshot_cache:
+                env["_watched_state_index"] = state_index_cache[server_2.server_type]
+                snapshot_cache[server_2_key] = server_2.get_watched(
+                    server_2_users, server_2_libraries
+                )
             server_2_state_index = state_index_cache[server_2.server_type]
-            server_2_watched = deepcopy(server_2_snapshot)
+            server_2_watched = deepcopy(snapshot_cache[server_2_key])
             logger.info("Finished creating watched list server 2")
 
             env["_watched_state_index"] = server_1_state_index
