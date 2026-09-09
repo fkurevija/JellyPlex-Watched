@@ -976,6 +976,49 @@ def test_manual_unwatched_transition_remains_explicit_until_watched(tmp_path):
     assert not restored.status.manually_unwatched
 
 
+def test_indexed_state_preserves_transition_timestamps(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Indexed Jellyfin Item",
+        locations=("indexed-jellyfin-item.mkv",),
+        imdb_id="tt7654327",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[watched_item])})},
+        env,
+        "Jellyfin",
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[unwatched_item])})},
+        env,
+        "Jellyfin",
+    )
+
+    with sqlite3.connect(initialize_watched_state_db(env)) as connection:
+        state_changed_at, manual_unwatched_at = connection.execute(
+            "SELECT state_changed_at, manual_unwatched_at FROM media_state"
+        ).fetchone()
+
+    assert unwatched_item.status.manually_unwatched
+    assert state_changed_at
+    assert manual_unwatched_at
+    datetime.fromisoformat(state_changed_at)
+    datetime.fromisoformat(manual_unwatched_at)
+
+
 # def test_mapping_cleanup_watched():
 #    user_watched_list_1 = {
 #        "user1": {

@@ -376,7 +376,7 @@ def _apply_manual_unwatched_item_state_db(
 
     if (
         previous
-        and previous[3]
+        and previous[4]
         and not item.status.completed
         and item.status.time <= 10_000
         and not pending_matches
@@ -386,7 +386,7 @@ def _apply_manual_unwatched_item_state_db(
 
     if (
         previous
-        and bool(previous[0])
+        and bool(previous[1])
         and not item.status.completed
         and item.status.time <= 10_000
         and not pending_matches
@@ -396,14 +396,14 @@ def _apply_manual_unwatched_item_state_db(
         item.status.manually_unwatched = True
         manual_unwatched_at = now.isoformat()
     elif item.status.manually_unwatched:
-        manual_unwatched_at = previous[3] if previous else now.isoformat()
+        manual_unwatched_at = previous[4] if previous else now.isoformat()
 
     state_changed_at = (
         now.isoformat()
         if not previous
-        or bool(previous[0]) != item.status.completed
-        or abs(previous[1] - item.status.time) > 10_000
-        else previous[2]
+        or bool(previous[1]) != item.status.completed
+        or abs(previous[2] - item.status.time) > 10_000
+        else previous[3]
     )
     connection.execute(
         """
