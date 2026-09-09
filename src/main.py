@@ -235,6 +235,7 @@ def main_loop(env: dict[str, str | float | None]) -> None:
                     env, server_1.server_type
                 )
             if server_1_key not in snapshot_cache:
+                env["_watched_state_index"] = state_index_cache[server_1.server_type]
                 snapshot_cache[server_1_key] = server_1.get_watched(
                     server_1_users, server_1_libraries
                 )
@@ -259,6 +260,7 @@ def main_loop(env: dict[str, str | float | None]) -> None:
                     env, server_2.server_type
                 )
             if server_2_key not in snapshot_cache:
+                env["_watched_state_index"] = state_index_cache[server_2.server_type]
                 snapshot_cache[server_2_key] = server_2.get_watched(
                     server_2_users, server_2_libraries
                 )
