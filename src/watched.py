@@ -377,6 +377,17 @@ def _find_pending(index: dict[str, Any], item: MediaItem) -> tuple | None:
     return None
 
 
+def _remove_pending_from_index(
+    state_index: dict[str, Any] | None,
+    pending_key: str,
+) -> None:
+    if not state_index:
+        return
+    for key_name, value in list(state_index["pending"].items()):
+        if value[0][0] == pending_key:
+            del state_index["pending"][key_name]
+
+
 def _apply_manual_unwatched_item_state_db(
     connection: sqlite3.Connection,
     item: MediaItem,
@@ -464,18 +475,16 @@ def _apply_manual_unwatched_item_state_db(
                 manual_unwatched_at,
             ),
         )
-    if pending_matches:
+    if pending:
+        pending_state_key = pending_key or mediaitem_identity_key(item)
         connection.execute(
             """
             DELETE FROM pending_sync
             WHERE state_key = ? AND destination_server = ?
             """,
-            (pending_key or mediaitem_identity_key(item), source_server or ""),
+            (pending_state_key, source_server or ""),
         )
-        if state_index:
-            for key_name, value in list(state_index["pending"].items()):
-                if value[0][0] == pending_key:
-                    del state_index["pending"][key_name]
+        _remove_pending_from_index(state_index, pending_state_key)
 
 
 def record_pending_sync(

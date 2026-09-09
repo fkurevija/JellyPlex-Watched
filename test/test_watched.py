@@ -931,6 +931,45 @@ def test_pending_sync_matches_destination_without_server_scoped_key(tmp_path):
     assert pending == (0,)
 
 
+def test_diverged_pending_sync_is_discarded_before_manual_unwatched_detection(
+    tmp_path,
+):
+    identifiers = MediaIdentifiers(
+        title="Diverged Pending Item",
+        locations=("diverged-pending-item.mkv",),
+        imdb_id="tt7654328",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[watched_item])})},
+        env,
+        "Jellyfin",
+    )
+    record_pending_sync(env, watched_item, "Jellyfin")
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[unwatched_item])})},
+        env,
+        "Jellyfin",
+    )
+
+    assert unwatched_item.status.manually_unwatched
+    with sqlite3.connect(initialize_watched_state_db(env)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pending_sync").fetchone() == (0,)
+
+
 def test_manual_unwatched_transition_remains_explicit_until_watched(tmp_path):
     identifiers = MediaIdentifiers(
         title="Persistent Reset",
