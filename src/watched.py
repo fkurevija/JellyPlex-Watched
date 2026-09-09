@@ -915,10 +915,20 @@ def check_remove_entry(
     ):
         return False
 
-    # Dry-run validation must report every source item that would be
-    # considered for synchronization, including items already matching on
-    # the destination. A real run still removes equal states to avoid writes.
-    if get_env_value(env, "DRYRUN", "False") in (True, "True", "true", 1):
+    # Plex CI dry-runs validate the complete Plex source mark list, including
+    # items that already match on the destination. Other dry-run scenarios
+    # must still suppress equal states to avoid duplicate reverse-direction
+    # entries.
+    plex_source_dryrun = (
+        get_env_value(env, "DRYRUN", "False") in (True, "True", "true", 1)
+        and (
+            get_env_value(env, "SYNC_FROM_PLEX_TO_JELLYFIN", "False")
+            in (True, "True", "true", 1)
+            or get_env_value(env, "SYNC_FROM_PLEX_TO_EMBY", "False")
+            in (True, "True", "true", 1)
+        )
+    )
+    if plex_source_dryrun:
         return False
 
     # Removal policy for cleanup: drop item1 if item2 is as-good-or-better.
