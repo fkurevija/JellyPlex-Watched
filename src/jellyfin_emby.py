@@ -577,7 +577,13 @@ class JellyfinEmby:
                                         json=user_data_payload,
                                     )
                                     record_pending_sync(
-                                        self.env, stored_movie, self.server_type
+                                        self.env,
+                                        stored_movie,
+                                        self.server_type,
+                                        MediaItem(
+                                            identifiers=jelly_identifiers,
+                                            status=stored_movie.status,
+                                        ),
                                     )
 
                                 logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
@@ -614,7 +620,13 @@ class JellyfinEmby:
                                         json=user_data_payload,
                                     )
                                     record_pending_sync(
-                                        self.env, stored_movie, self.server_type
+                                        self.env,
+                                        stored_movie,
+                                        self.server_type,
+                                        MediaItem(
+                                            identifiers=jelly_identifiers,
+                                            status=stored_movie.status,
+                                        ),
                                     )
 
                                 logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
@@ -655,7 +667,13 @@ class JellyfinEmby:
                                         json=user_data_payload,
                                     )
                                     record_pending_sync(
-                                        self.env, stored_movie, self.server_type
+                                        self.env,
+                                        stored_movie,
+                                        self.server_type,
+                                        MediaItem(
+                                            identifiers=jelly_identifiers,
+                                            status=stored_movie.status,
+                                        ),
                                     )
 
                                 logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
@@ -775,6 +793,10 @@ class JellyfinEmby:
                                                     self.env,
                                                     stored_ep,
                                                     self.server_type,
+                                                    MediaItem(
+                                                        identifiers=jellyfin_episode_identifiers,
+                                                        status=stored_ep.status,
+                                                    ),
                                                 )
 
                                             logger.success(
@@ -822,6 +844,10 @@ class JellyfinEmby:
                                                     self.env,
                                                     stored_ep,
                                                     self.server_type,
+                                                    MediaItem(
+                                                        identifiers=jellyfin_episode_identifiers,
+                                                        status=stored_ep.status,
+                                                    ),
                                                 )
 
                                             logger.success(
@@ -874,6 +900,10 @@ class JellyfinEmby:
                                                     self.env,
                                                     stored_ep,
                                                     self.server_type,
+                                                    MediaItem(
+                                                        identifiers=jellyfin_episode_identifiers,
+                                                        status=stored_ep.status,
+                                                    ),
                                                 )
 
                                             logger.success(

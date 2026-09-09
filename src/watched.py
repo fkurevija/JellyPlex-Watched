@@ -56,14 +56,21 @@ class UserData(BaseModel):
     libraries: dict[str, LibraryData] = Field(default_factory=dict)
 
 
-def mediaitem_state_key(item: MediaItem, source_server: str | None = None) -> str:
-    payload = {
+def mediaitem_identity_key(item: MediaItem) -> str:
+    return json.dumps(
+        {
         "title": item.identifiers.title or "",
         "locations": list(item.identifiers.locations),
         "imdb_id": item.identifiers.imdb_id or "",
         "tvdb_id": item.identifiers.tvdb_id or "",
         "tmdb_id": item.identifiers.tmdb_id or "",
-    }
+        },
+        sort_keys=True,
+    )
+
+
+def mediaitem_state_key(item: MediaItem, source_server: str | None = None) -> str:
+    payload = json.loads(mediaitem_identity_key(item))
     if source_server:
         payload["source_server"] = source_server
     return json.dumps(payload, sort_keys=True)
@@ -241,7 +248,7 @@ def _apply_manual_unwatched_item_state_db(
         FROM pending_sync
         WHERE state_key = ? AND destination_server = ?
         """,
-        (key, source_server or ""),
+        (mediaitem_identity_key(item), source_server or ""),
     ).fetchone()
     pending_matches = bool(
         pending
@@ -298,7 +305,7 @@ def _apply_manual_unwatched_item_state_db(
             DELETE FROM pending_sync
             WHERE state_key = ? AND destination_server = ?
             """,
-            (key, source_server or ""),
+            (mediaitem_identity_key(item), source_server or ""),
         )
 
 
@@ -306,6 +313,7 @@ def record_pending_sync(
     env: dict[str, str | float | None],
     item: MediaItem,
     destination_server: str,
+    destination_item: MediaItem | None = None,
 ) -> None:
     """Record a state written by this process for destination confirmation."""
     db_path = initialize_watched_state_db(env)
@@ -322,7 +330,7 @@ def record_pending_sync(
                 created_at = excluded.created_at
             """,
             (
-                mediaitem_state_key(item, destination_server),
+                mediaitem_identity_key(destination_item or item),
                 destination_server,
                 int(item.status.completed),
                 item.status.time,

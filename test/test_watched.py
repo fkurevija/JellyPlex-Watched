@@ -28,6 +28,7 @@ from src.watched import (
     compare_media_items,
     initialize_watched_state_db,
     mediaitem_state_key,
+    mediaitem_identity_key,
     Ord,
     record_pending_sync,
 )
@@ -870,6 +871,53 @@ def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
     )
     assert restored_item.status.completed
     assert not restored_item.status.manually_unwatched
+
+
+def test_pending_sync_matches_destination_without_server_scoped_key(tmp_path):
+    source_identifiers = MediaIdentifiers(
+        title="Episode From Plex",
+        locations=("episode.mkv",),
+        imdb_id="tt7654325",
+    )
+    destination_identifiers = MediaIdentifiers(
+        title="Episode From Jellyfin",
+        locations=("episode.mkv",),
+        imdb_id="tt7654325",
+    )
+    source_watched = MediaItem(
+        identifiers=source_identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    destination_unwatched = MediaItem(
+        identifiers=destination_identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[source_watched])})},
+        env,
+        "Plex",
+    )
+    record_pending_sync(env, destination_unwatched, "Jellyfin")
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[destination_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+
+    assert not destination_unwatched.status.manually_unwatched
+    with sqlite3.connect(initialize_watched_state_db(env)) as connection:
+        pending = connection.execute("SELECT COUNT(*) FROM pending_sync").fetchone()
+    assert pending == (0,)
 
 
 # def test_mapping_cleanup_watched():

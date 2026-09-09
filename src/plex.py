@@ -415,7 +415,13 @@ class Plex:
                                 try:
                                     plex_movie.markWatched()
                                     record_pending_sync(
-                                        self.env, stored_movie, "Plex"
+                                        self.env,
+                                        stored_movie,
+                                        "Plex",
+                                        MediaItem(
+                                            identifiers=plex_identifiers,
+                                            status=stored_movie.status,
+                                        ),
                                     )
                                 except Exception as e:
                                     logger.error(
@@ -445,7 +451,13 @@ class Plex:
                                     plex_movie.markUnwatched()
                                     plex_movie.updateTimeline(0)
                                     record_pending_sync(
-                                        self.env, stored_movie, "Plex"
+                                        self.env,
+                                        stored_movie,
+                                        "Plex",
+                                        MediaItem(
+                                            identifiers=plex_identifiers,
+                                            status=stored_movie.status,
+                                        ),
                                     )
                                 except Exception as e:
                                     logger.error(
@@ -477,7 +489,13 @@ class Plex:
                                     plex_movie.markUnwatched()  # Unmark as watched first so completed status is set to false
                                     plex_movie.updateTimeline(stored_movie.status.time)
                                     record_pending_sync(
-                                        self.env, stored_movie, "Plex"
+                                        self.env,
+                                        stored_movie,
+                                        "Plex",
+                                        MediaItem(
+                                            identifiers=plex_identifiers,
+                                            status=stored_movie.status,
+                                        ),
                                     )
                                 except Exception as e:
                                     logger.error(
@@ -539,7 +557,13 @@ class Plex:
                                             try:
                                                 plex_episode.markWatched()
                                                 record_pending_sync(
-                                                    self.env, stored_ep, "Plex"
+                                                    self.env,
+                                                    stored_ep,
+                                                    "Plex",
+                                                    MediaItem(
+                                                        identifiers=plex_episode_identifiers,
+                                                        status=stored_ep.status,
+                                                    ),
                                                 )
                                             except Exception as e:
                                                 logger.error(
@@ -573,7 +597,13 @@ class Plex:
                                                 plex_episode.markUnwatched()
                                                 plex_episode.updateTimeline(0)
                                                 record_pending_sync(
-                                                    self.env, stored_ep, "Plex"
+                                                    self.env,
+                                                    stored_ep,
+                                                    "Plex",
+                                                    MediaItem(
+                                                        identifiers=plex_episode_identifiers,
+                                                        status=stored_ep.status,
+                                                    ),
                                                 )
                                             except Exception as e:
                                                 logger.error(
@@ -612,7 +642,13 @@ class Plex:
                                                     stored_ep.status.time
                                                 )
                                                 record_pending_sync(
-                                                    self.env, stored_ep, "Plex"
+                                                    self.env,
+                                                    stored_ep,
+                                                    "Plex",
+                                                    MediaItem(
+                                                        identifiers=plex_episode_identifiers,
+                                                        status=stored_ep.status,
+                                                    ),
                                                 )
                                             except Exception as e:
                                                 logger.error(
