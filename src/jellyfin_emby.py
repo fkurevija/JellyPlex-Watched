@@ -23,6 +23,7 @@ from src.watched import (
     Series,
     UserData,
     check_same_identifiers,
+    record_pending_sync,
     was_previously_watched,
 )
 
@@ -575,6 +576,9 @@ class JellyfinEmby:
                                         "post",
                                         json=user_data_payload,
                                     )
+                                    record_pending_sync(
+                                        self.env, stored_movie, self.server_type
+                                    )
 
                                 logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
                                 log_marked(
@@ -608,6 +612,9 @@ class JellyfinEmby:
                                         f"/Users/{user_id}/Items/{jellyfin_video_id}/UserData",
                                         "post",
                                         json=user_data_payload,
+                                    )
+                                    record_pending_sync(
+                                        self.env, stored_movie, self.server_type
                                     )
 
                                 logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
@@ -646,6 +653,9 @@ class JellyfinEmby:
                                         f"/Users/{user_id}/Items/{jellyfin_video_id}/UserData",
                                         "post",
                                         json=user_data_payload,
+                                    )
+                                    record_pending_sync(
+                                        self.env, stored_movie, self.server_type
                                     )
 
                                 logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
@@ -761,6 +771,11 @@ class JellyfinEmby:
                                                     "post",
                                                     json=user_data_payload,
                                                 )
+                                                record_pending_sync(
+                                                    self.env,
+                                                    stored_ep,
+                                                    self.server_type,
+                                                )
 
                                             logger.success(
                                                 f"{'[DRYRUN] ' if dryrun else ''}{msg}"
@@ -802,6 +817,11 @@ class JellyfinEmby:
                                                     f"/Users/{user_id}/Items/{jellyfin_episode_id}/UserData",
                                                     "post",
                                                     json=user_data_payload,
+                                                )
+                                                record_pending_sync(
+                                                    self.env,
+                                                    stored_ep,
+                                                    self.server_type,
                                                 )
 
                                             logger.success(
@@ -849,6 +869,11 @@ class JellyfinEmby:
                                                     f"/Users/{user_id}/Items/{jellyfin_episode_id}/UserData",
                                                     "post",
                                                     json=user_data_payload,
+                                                )
+                                                record_pending_sync(
+                                                    self.env,
+                                                    stored_ep,
+                                                    self.server_type,
                                                 )
 
                                             logger.success(

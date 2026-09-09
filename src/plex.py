@@ -27,6 +27,7 @@ from src.watched import (
     Series,
     UserData,
     check_same_identifiers,
+    record_pending_sync,
     was_previously_watched,
 )
 
@@ -413,6 +414,9 @@ class Plex:
                             if not dryrun:
                                 try:
                                     plex_movie.markWatched()
+                                    record_pending_sync(
+                                        self.env, stored_movie, "Plex"
+                                    )
                                 except Exception as e:
                                     logger.error(
                                         f"Plex: Failed to mark {plex_movie.title} as watched, Error: {e}"
@@ -440,6 +444,9 @@ class Plex:
                                 try:
                                     plex_movie.markUnwatched()
                                     plex_movie.updateTimeline(0)
+                                    record_pending_sync(
+                                        self.env, stored_movie, "Plex"
+                                    )
                                 except Exception as e:
                                     logger.error(
                                         f"Plex: Failed to mark {plex_movie.title} as unwatched, Error: {e}"
@@ -469,6 +476,9 @@ class Plex:
                                 try:
                                     plex_movie.markUnwatched()  # Unmark as watched first so completed status is set to false
                                     plex_movie.updateTimeline(stored_movie.status.time)
+                                    record_pending_sync(
+                                        self.env, stored_movie, "Plex"
+                                    )
                                 except Exception as e:
                                     logger.error(
                                         f"Plex: Failed to update {plex_movie.title} timeline, Error: {e}"
@@ -528,6 +538,9 @@ class Plex:
                                         if not dryrun:
                                             try:
                                                 plex_episode.markWatched()
+                                                record_pending_sync(
+                                                    self.env, stored_ep, "Plex"
+                                                )
                                             except Exception as e:
                                                 logger.error(
                                                     f"Plex: Failed to mark {plex_show.title} {plex_episode.title} as watched, Error: {e}"
@@ -559,6 +572,9 @@ class Plex:
                                             try:
                                                 plex_episode.markUnwatched()
                                                 plex_episode.updateTimeline(0)
+                                                record_pending_sync(
+                                                    self.env, stored_ep, "Plex"
+                                                )
                                             except Exception as e:
                                                 logger.error(
                                                     f"Plex: Failed to mark {plex_show.title} {plex_episode.title} as unwatched, Error: {e}"
@@ -594,6 +610,9 @@ class Plex:
                                             try:
                                                 plex_episode.updateTimeline(
                                                     stored_ep.status.time
+                                                )
+                                                record_pending_sync(
+                                                    self.env, stored_ep, "Plex"
                                                 )
                                             except Exception as e:
                                                 logger.error(

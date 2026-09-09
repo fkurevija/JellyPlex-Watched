@@ -97,7 +97,33 @@ def initialize_watched_state_db(
                 completed INTEGER NOT NULL,
                 resume_ms INTEGER NOT NULL,
                 viewed_date TEXT NOT NULL,
-                manual_unwatched_at TEXT
+                manual_unwatched_at TEXT,
+                observed_at TEXT NOT NULL DEFAULT '',
+                state_changed_at TEXT
+            )
+            """
+        )
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(media_state)").fetchall()
+        }
+        if "observed_at" not in columns:
+            connection.execute(
+                "ALTER TABLE media_state ADD COLUMN observed_at TEXT NOT NULL DEFAULT ''"
+            )
+        if "state_changed_at" not in columns:
+            connection.execute(
+                "ALTER TABLE media_state ADD COLUMN state_changed_at TEXT"
+            )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_sync (
+                state_key TEXT NOT NULL,
+                destination_server TEXT NOT NULL,
+                expected_completed INTEGER NOT NULL,
+                expected_resume_ms INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (state_key, destination_server)
             )
             """
         )
@@ -200,32 +226,61 @@ def _apply_manual_unwatched_item_state_db(
 ) -> None:
     key = mediaitem_state_key(item, source_server)
     previous = connection.execute(
-        "SELECT completed FROM media_state WHERE state_key = ?", (key,)
+        """
+        SELECT completed, resume_ms, state_changed_at
+        FROM media_state
+        WHERE state_key = ?
+        """,
+        (key,),
     ).fetchone()
     now = datetime.now(timezone.utc)
     manual_unwatched_at = None
+    pending = connection.execute(
+        """
+        SELECT expected_completed, expected_resume_ms
+        FROM pending_sync
+        WHERE state_key = ? AND destination_server = ?
+        """,
+        (key, source_server or ""),
+    ).fetchone()
+    pending_matches = bool(
+        pending
+        and bool(pending[0]) == item.status.completed
+        and abs(pending[1] - item.status.time) <= 10_000
+    )
 
     if (
         previous
         and bool(previous[0])
         and not item.status.completed
         and item.status.time <= 10_000
+        and not pending_matches
     ):
         item.status.viewed_date = now
         item.status.time = 0
         item.status.manually_unwatched = True
         manual_unwatched_at = now.isoformat()
 
+    state_changed_at = (
+        now.isoformat()
+        if not previous
+        or bool(previous[0]) != item.status.completed
+        or abs(previous[1] - item.status.time) > 10_000
+        else previous[2]
+    )
     connection.execute(
         """
         INSERT INTO media_state
-        (state_key, completed, resume_ms, viewed_date, manual_unwatched_at)
-        VALUES (?, ?, ?, ?, ?)
+        (state_key, completed, resume_ms, viewed_date, manual_unwatched_at,
+         observed_at, state_changed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(state_key) DO UPDATE SET
             completed = excluded.completed,
             resume_ms = excluded.resume_ms,
             viewed_date = excluded.viewed_date,
-            manual_unwatched_at = excluded.manual_unwatched_at
+            manual_unwatched_at = excluded.manual_unwatched_at,
+            observed_at = excluded.observed_at,
+            state_changed_at = excluded.state_changed_at
         """,
         (
             key,
@@ -233,8 +288,47 @@ def _apply_manual_unwatched_item_state_db(
             item.status.time,
             item.status.viewed_date.isoformat(),
             manual_unwatched_at,
+            now.isoformat(),
+            state_changed_at,
         ),
     )
+    if pending_matches:
+        connection.execute(
+            """
+            DELETE FROM pending_sync
+            WHERE state_key = ? AND destination_server = ?
+            """,
+            (key, source_server or ""),
+        )
+
+
+def record_pending_sync(
+    env: dict[str, str | float | None],
+    item: MediaItem,
+    destination_server: str,
+) -> None:
+    """Record a state written by this process for destination confirmation."""
+    db_path = initialize_watched_state_db(env)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO pending_sync
+            (state_key, destination_server, expected_completed,
+             expected_resume_ms, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(state_key, destination_server) DO UPDATE SET
+                expected_completed = excluded.expected_completed,
+                expected_resume_ms = excluded.expected_resume_ms,
+                created_at = excluded.created_at
+            """,
+            (
+                mediaitem_state_key(item, destination_server),
+                destination_server,
+                int(item.status.completed),
+                item.status.time,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
 
 
 def apply_manual_unwatched_state(
@@ -275,9 +369,13 @@ def compare_media_items(
         to_aware_utc(media2.status.viewed_date),
     )
 
-    # A manual unwatched transition is an explicit user action and must win
-    # over a stale watched or partial-progress state on another server.
+    # A manual unwatched transition wins over stale partial progress, but a
+    # newer explicit watched state must be allowed to restore the item.
     if media1.status.manually_unwatched != media2.status.manually_unwatched:
+        if media1.status.manually_unwatched and media2.status.completed:
+            return Ord.B_BETTER
+        if media2.status.manually_unwatched and media1.status.completed:
+            return Ord.A_BETTER
         return (
             Ord.A_BETTER
             if media1.status.manually_unwatched

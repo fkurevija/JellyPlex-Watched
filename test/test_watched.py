@@ -29,6 +29,7 @@ from src.watched import (
     initialize_watched_state_db,
     mediaitem_state_key,
     Ord,
+    record_pending_sync,
 )
 
 viewed_date = datetime.today()
@@ -814,6 +815,61 @@ def test_manual_unwatched_state_wins_over_partial_progress():
 
     assert compare_media_items(unwatched_item, partial_item, {}) == Ord.A_BETTER
     assert compare_media_items(partial_item, unwatched_item, {}) == Ord.B_BETTER
+
+
+def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Propagated Reset",
+        locations=("Propagated Reset.mkv",),
+        imdb_id="tt7654324",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[watched_item])})},
+        env,
+        "Plex",
+    )
+    record_pending_sync(env, unwatched_item, "Jellyfin")
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[unwatched_item])})},
+        env,
+        "Jellyfin",
+    )
+
+    assert not unwatched_item.status.manually_unwatched
+
+    restored_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[restored_item])})},
+        env,
+        "Jellyfin",
+    )
+    assert restored_item.status.completed
+    assert not restored_item.status.manually_unwatched
 
 
 # def test_mapping_cleanup_watched():
