@@ -197,6 +197,8 @@ def was_previously_watched(
         row = _find_indexed(
             item, state_index, str(env.get("_watched_state_source", ""))
         )
+        if row is None:
+            row = _find_any_indexed(item, state_index)
         return row is not None
 
     db_path = initialize_watched_state_db(env)
@@ -288,17 +290,30 @@ def load_state_index(
         "by_tvdb_id": {},
         "by_tmdb_id": {},
         "by_title": {},
+        "by_any_state_key": {},
+        "by_any_location": {},
+        "by_any_imdb_id": {},
+        "by_any_tvdb_id": {},
+        "by_any_tmdb_id": {},
+        "by_any_title": {},
         "pending": {},
     }
-    for row in rows:
+    source_rows = rows[:]
+    for row in source_rows:
         try:
             identity = json.loads(row[0])
         except json.JSONDecodeError:
             continue
         normalized = (row, identity)
-        index["by_state_key"].setdefault(row[0], normalized)
+        is_current_source = (
+            f'"source_server": "{source_server or ""}"' in row[0]
+            or '"source_server":' not in row[0]
+        )
+        state_key_name = "by_state_key" if is_current_source else "by_any_state_key"
+        location_name = "by_location" if is_current_source else "by_any_location"
+        index[state_key_name].setdefault(row[0], normalized)
         for location in identity.get("locations", []):
-            index["by_location"].setdefault(location, normalized)
+            index[location_name].setdefault(location, normalized)
         for field, index_name in (
             ("imdb_id", "by_imdb_id"),
             ("tvdb_id", "by_tvdb_id"),
@@ -307,7 +322,9 @@ def load_state_index(
         ):
             value = identity.get(field)
             if value:
-                index[index_name].setdefault(value, normalized)
+                index[
+                    index_name if is_current_source else f"by_any_{field}"
+                ].setdefault(value, normalized)
 
     for row in pending_rows:
         try:
@@ -345,6 +362,25 @@ def _find_indexed(
     ):
         if value and value in index[f"by_{field}"]:
             return index[f"by_{field}"][value][0]
+    return None
+
+
+def _find_any_indexed(
+    item: MediaItem,
+    index: dict[str, Any],
+) -> tuple | None:
+    locations, imdb_id, tvdb_id, tmdb_id, title = _identity_values(item)
+    for location in locations:
+        if location in index["by_any_location"]:
+            return index["by_any_location"][location][0]
+    for field, value in (
+        ("imdb_id", imdb_id),
+        ("tvdb_id", tvdb_id),
+        ("tmdb_id", tmdb_id),
+        ("title", title),
+    ):
+        if value and value in index[f"by_any_{field}"]:
+            return index[f"by_any_{field}"][value][0]
     return None
 
 
