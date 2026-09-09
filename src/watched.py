@@ -234,7 +234,7 @@ def _apply_manual_unwatched_item_state_db(
     key = mediaitem_state_key(item, source_server)
     previous = connection.execute(
         """
-        SELECT completed, resume_ms, state_changed_at
+        SELECT completed, resume_ms, state_changed_at, manual_unwatched_at
         FROM media_state
         WHERE state_key = ?
         """,
@@ -258,6 +258,16 @@ def _apply_manual_unwatched_item_state_db(
 
     if (
         previous
+        and previous[3]
+        and not item.status.completed
+        and item.status.time <= 10_000
+        and not pending_matches
+    ):
+        item.status.time = 0
+        item.status.manually_unwatched = True
+
+    if (
+        previous
         and bool(previous[0])
         and not item.status.completed
         and item.status.time <= 10_000
@@ -267,6 +277,8 @@ def _apply_manual_unwatched_item_state_db(
         item.status.time = 0
         item.status.manually_unwatched = True
         manual_unwatched_at = now.isoformat()
+    elif item.status.manually_unwatched:
+        manual_unwatched_at = previous[3] if previous else now.isoformat()
 
     state_changed_at = (
         now.isoformat()

@@ -931,6 +931,51 @@ def test_pending_sync_matches_destination_without_server_scoped_key(tmp_path):
     assert pending == (0,)
 
 
+def test_manual_unwatched_transition_remains_explicit_until_watched(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Persistent Reset",
+        locations=("Persistent Reset.mkv",),
+        imdb_id="tt7654326",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    watched = {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[watched_item])})}
+    unwatched = {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[unwatched_item])})}
+
+    apply_manual_unwatched_state(watched, env, "Jellyfin")
+    apply_manual_unwatched_state(unwatched, env, "Jellyfin")
+    assert unwatched_item.status.manually_unwatched
+
+    next_unwatched = unwatched_item.model_copy(deep=True)
+    next_unwatched.status.manually_unwatched = False
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[next_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+    assert next_unwatched.status.manually_unwatched
+
+    restored = watched_item.model_copy(deep=True)
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[restored])})},
+        env,
+        "Jellyfin",
+    )
+    assert not restored.status.manually_unwatched
+
+
 # def test_mapping_cleanup_watched():
 #    user_watched_list_1 = {
 #        "user1": {
