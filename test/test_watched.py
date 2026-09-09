@@ -27,10 +27,12 @@ from src.watched import (
     cleanup_watched,
     compare_media_items,
     initialize_watched_state_db,
+    load_state_index,
     mediaitem_state_key,
     mediaitem_identity_key,
     Ord,
     record_pending_sync,
+    was_previously_watched,
 )
 
 viewed_date = datetime.today()
@@ -1056,6 +1058,35 @@ def test_indexed_state_preserves_transition_timestamps(tmp_path):
     assert manual_unwatched_at
     datetime.fromisoformat(state_changed_at)
     datetime.fromisoformat(manual_unwatched_at)
+
+
+def test_tracked_unwatched_state_remains_collectable(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Tracked Unwatched Item",
+        locations=("tracked-unwatched-item.mkv",),
+        imdb_id="tt7654329",
+    )
+    item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[item])})},
+        env,
+        "Jellyfin",
+    )
+    item.status.completed = False
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[item])})},
+        env,
+        "Jellyfin",
+    )
+
+    env["_watched_state_index"] = load_state_index(env, "Jellyfin")
+    assert was_previously_watched(item, env)
 
 
 # def test_mapping_cleanup_watched():

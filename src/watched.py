@@ -195,7 +195,7 @@ def was_previously_watched(
     state_index = env.get("_watched_state_index")
     if isinstance(state_index, dict):
         row = _find_indexed(item, state_index)
-        return bool(row and row[1])
+        return row is not None
 
     db_path = initialize_watched_state_db(env)
     with sqlite3.connect(db_path) as connection:
@@ -203,7 +203,7 @@ def was_previously_watched(
             "SELECT completed FROM media_state WHERE state_key = ?",
             (mediaitem_state_key(item, str(env.get("_watched_state_source", ""))),),
         ).fetchone()
-    return bool(row and row[0])
+    return row is not None
 
 
 def load_previously_watched_keys(
