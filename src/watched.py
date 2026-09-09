@@ -942,6 +942,22 @@ def check_remove_entry(
     if plex_source_dryrun:
         return False
 
+    # Jellyfin-originated dry-runs also need to retain completed source
+    # entries. The destination may expose the same item as an incomplete
+    # record (or with a synthetic timestamp), but the source entry is still
+    # required for the direction-specific dry-run mark list.
+    jellyfin_source_dryrun = (
+        get_env_value(env, "DRYRUN", "False") in (True, "True", "true", 1)
+        and (
+            get_env_value(env, "SYNC_FROM_JELLYFIN_TO_PLEX", "False")
+            in (True, "True", "true", 1)
+            or get_env_value(env, "SYNC_FROM_JELLYFIN_TO_EMBY", "False")
+            in (True, "True", "true", 1)
+        )
+    )
+    if jellyfin_source_dryrun and item1.status.completed:
+        return False
+
     # Removal policy for cleanup: drop item1 if item2 is as-good-or-better.
     return compare_media_items(item1, item2, env) in (Ord.B_BETTER, Ord.TIE)
 
