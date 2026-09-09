@@ -442,7 +442,10 @@ class Plex:
                                     self.env, "MARK_FILE", "mark.log"
                                 ),
                             )
-                        elif stored_movie.status.manually_unwatched:
+                        elif (
+                            stored_movie.status.manually_unwatched
+                            and stored_movie.status.manual_unwatched_at is not None
+                        ):
                             if not plex_movie.isWatched and plex_movie.viewOffset <= 10_000:
                                 break
                             msg = f"Plex: {plex_movie.title} as unwatched for {user.title} in {library_name}"
@@ -585,7 +588,10 @@ class Plex:
                                                 self.env, "MARK_FILE", "mark.log"
                                             ),
                                         )
-                                    elif stored_ep.status.manually_unwatched:
+                                    elif (
+                                        stored_ep.status.manually_unwatched
+                                        and stored_ep.status.manual_unwatched_at is not None
+                                    ):
                                         if (
                                             not plex_episode.isWatched
                                             and plex_episode.viewOffset <= 10_000

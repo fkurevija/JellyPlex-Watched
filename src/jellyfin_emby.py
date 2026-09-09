@@ -597,7 +597,10 @@ class JellyfinEmby:
                                         self.env, "MARK_FILE", "mark.log"
                                     ),
                                 )
-                            elif stored_movie.status.manually_unwatched:
+                            elif (
+                                stored_movie.status.manually_unwatched
+                                and stored_movie.status.manual_unwatched_at is not None
+                            ):
                                 current_data = jellyfin_video.get("UserData") or {}
                                 if (
                                     not current_data.get("Played")
@@ -813,7 +816,10 @@ class JellyfinEmby:
                                                     self.env, "MARK_FILE", "mark.log"
                                                 ),
                                             )
-                                        elif stored_ep.status.manually_unwatched:
+                                        elif (
+                                            stored_ep.status.manually_unwatched
+                                            and stored_ep.status.manual_unwatched_at is not None
+                                        ):
                                             current_data = jellyfin_episode.get("UserData") or {}
                                             if (
                                                 not current_data.get("Played")
