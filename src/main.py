@@ -179,6 +179,8 @@ def main_loop(env: dict[str, str | float | None]) -> None:
     logger.info("Creating server connections")
     servers = generate_server_connections(env)
     snapshot_cache: dict[tuple[int, tuple[str, ...], tuple[str, ...]], dict] = {}
+    state_index_cache: dict[str, dict] = {}
+    env["_watched_state_indexes"] = state_index_cache
 
     for server_1 in servers:
         # If server is the final server in the list, then we are done with the loop
@@ -228,14 +230,15 @@ def main_loop(env: dict[str, str | float | None]) -> None:
                 server_1_user_key,
                 tuple(sorted(server_1_libraries)),
             )
-            if server_1_key not in snapshot_cache:
-                env["_watched_state_index"] = load_state_index(
+            if server_1.server_type not in state_index_cache:
+                state_index_cache[server_1.server_type] = load_state_index(
                     env, server_1.server_type
                 )
+            if server_1_key not in snapshot_cache:
                 snapshot_cache[server_1_key] = server_1.get_watched(
                     server_1_users, server_1_libraries
                 )
-            server_1_state_index = env["_watched_state_index"]
+            server_1_state_index = state_index_cache[server_1.server_type]
             server_1_watched = deepcopy(snapshot_cache[server_1_key])
             logger.info("Finished creating watched list server 1")
 
@@ -251,14 +254,15 @@ def main_loop(env: dict[str, str | float | None]) -> None:
                 server_2_user_key,
                 tuple(sorted(server_2_libraries)),
             )
-            if server_2_key not in snapshot_cache:
-                env["_watched_state_index"] = load_state_index(
+            if server_2.server_type not in state_index_cache:
+                state_index_cache[server_2.server_type] = load_state_index(
                     env, server_2.server_type
                 )
+            if server_2_key not in snapshot_cache:
                 snapshot_cache[server_2_key] = server_2.get_watched(
                     server_2_users, server_2_libraries
                 )
-            server_2_state_index = env["_watched_state_index"]
+            server_2_state_index = state_index_cache[server_2.server_type]
             server_2_watched = deepcopy(snapshot_cache[server_2_key])
             logger.info("Finished creating watched list server 2")
 
@@ -295,6 +299,7 @@ def main_loop(env: dict[str, str | float | None]) -> None:
             logger.debug(
                 f"server 2 watched that needs to be synced to server 1:\n{server_2_watched_filtered}",
             )
+            env["_watched_state_dirty"] = False
 
             if should_sync_server(env, server_2, server_1):
                 logger.info(f"Syncing {server_2.info()} -> {server_1.info()}")
@@ -324,6 +329,12 @@ def main_loop(env: dict[str, str | float | None]) -> None:
                     library_mapping,
                     dryrun,
                 )
+
+            if not dryrun and env.get("_watched_state_dirty"):
+                snapshot_cache.pop(server_1_key, None)
+                snapshot_cache.pop(server_2_key, None)
+                state_index_cache.pop(server_1.server_type, None)
+                state_index_cache.pop(server_2.server_type, None)
 
 
 @logger.catch

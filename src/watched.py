@@ -329,6 +329,30 @@ def _find_indexed(
     return None
 
 
+def _index_state_row(
+    state_index: dict[str, Any],
+    row: tuple,
+) -> None:
+    """Add the latest persisted state row to the in-memory lookup index."""
+    try:
+        identity = json.loads(row[0])
+    except (TypeError, json.JSONDecodeError):
+        return
+
+    normalized = (row, identity)
+    for location in identity.get("locations", []):
+        state_index["by_location"][location] = normalized
+    for field, index_name in (
+        ("imdb_id", "by_imdb_id"),
+        ("tvdb_id", "by_tvdb_id"),
+        ("tmdb_id", "by_tmdb_id"),
+        ("title", "by_title"),
+    ):
+        value = identity.get(field)
+        if value:
+            state_index[index_name][value] = normalized
+
+
 def _find_state_row(
     connection: sqlite3.Connection,
     item: MediaItem,
@@ -429,6 +453,17 @@ def _apply_manual_unwatched_item_state_db(
             state_changed_at,
         ),
     )
+    if state_index is not None:
+        _index_state_row(
+            state_index,
+            (
+                state_key,
+                int(item.status.completed),
+                item.status.time,
+                state_changed_at,
+                manual_unwatched_at,
+            ),
+        )
     if pending_matches:
         connection.execute(
             """
@@ -450,6 +485,7 @@ def record_pending_sync(
     destination_item: MediaItem | None = None,
 ) -> None:
     """Record a state written by this process for destination confirmation."""
+    env["_watched_state_dirty"] = True
     db_path = initialize_watched_state_db(env)
     identity_key = mediaitem_identity_key(destination_item or item)
     expected = (
@@ -477,7 +513,12 @@ def record_pending_sync(
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
-    state_index = env.get("_watched_state_index")
+    state_indexes = env.get("_watched_state_indexes")
+    state_index = (
+        state_indexes.get(destination_server)
+        if isinstance(state_indexes, dict)
+        else env.get("_watched_state_index")
+    )
     if isinstance(state_index, dict):
         normalized = ((identity_key, expected[1], expected[2]), json.loads(identity_key))
         identity = normalized[1]
