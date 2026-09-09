@@ -451,6 +451,9 @@ def _find_state_row(
             identity = json.loads(row[0])
         except (TypeError, json.JSONDecodeError):
             continue
+        stored_source = identity.get("source_server")
+        if stored_source not in (None, source_server):
+            continue
         if _identities_match(item, identity):
             return row
     return None

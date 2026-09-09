@@ -1253,6 +1253,48 @@ def test_cross_server_observation_does_not_create_manual_unwatched_state(tmp_pat
     assert not emby_item.status.manually_unwatched
 
 
+def test_manual_unwatched_detection_ignores_other_source_baseline(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Source Scoped Baseline",
+        locations=("source-scoped-baseline.mkv",),
+        imdb_id="tt7654335",
+    )
+    emby_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+    db_path = initialize_watched_state_db(env)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO media_state
+            (state_key, completed, resume_ms, viewed_date, manual_unwatched_at,
+             observed_at, state_changed_at)
+            VALUES (?, 1, 0, ?, NULL, ?, ?)
+            """,
+            (
+                mediaitem_state_key(emby_item, "Plex"),
+                emby_item.status.viewed_date.isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[emby_item])})},
+        env,
+        "Emby",
+    )
+
+    assert not emby_item.status.manually_unwatched
+
+
 def test_source_exact_state_precedes_flexible_identity_match(tmp_path):
     identifiers = MediaIdentifiers(
         title="Exact Source Item",
