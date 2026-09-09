@@ -906,6 +906,20 @@ def test_unconfirmed_manual_flag_does_not_remove_real_state():
     assert not check_remove_entry(real_state, synthetic_state, {})
 
 
+def test_dryrun_keeps_equal_state_for_mark_logging():
+    identifiers = MediaIdentifiers(title="Already Watched")
+    item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert not check_remove_entry(item, item.model_copy(deep=True), {"DRYRUN": "True"})
+
+
 def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
     identifiers = MediaIdentifiers(
         title="Propagated Reset",

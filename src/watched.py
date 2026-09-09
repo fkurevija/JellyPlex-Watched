@@ -915,6 +915,12 @@ def check_remove_entry(
     ):
         return False
 
+    # Dry-run validation must report every source item that would be
+    # considered for synchronization, including items already matching on
+    # the destination. A real run still removes equal states to avoid writes.
+    if get_env_value(env, "DRYRUN", "False") in (True, "True", "true", 1):
+        return False
+
     # Removal policy for cleanup: drop item1 if item2 is as-good-or-better.
     return compare_media_items(item1, item2, env) in (Ord.B_BETTER, Ord.TIE)
 

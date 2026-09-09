@@ -561,6 +561,7 @@ class JellyfinEmby:
                                 if (
                                     current_data.get("Played")
                                     and not current_data.get("PlaybackPositionTicks", 0)
+                                    and not dryrun
                                 ):
                                     break
                                 msg = f"{self.server_type}: {jellyfin_video.get('Name')} as watched for {user_name} in {library_name}"
@@ -771,6 +772,7 @@ class JellyfinEmby:
                                                 and not current_data.get(
                                                     "PlaybackPositionTicks", 0
                                                 )
+                                                and not dryrun
                                             ):
                                                 break
                                             msg = (
