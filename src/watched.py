@@ -370,8 +370,48 @@ def _find_state_row(
     state_index: dict[str, Any] | None = None,
 ) -> tuple | None:
     if state_index is not None:
-        return _find_indexed(item, state_index, source_server)
+        exact_key = mediaitem_state_key(item, source_server)
+        exact = state_index.get("by_state_key", {}).get(exact_key)
+        if exact is not None:
+            return exact[0]
+
+    rows = connection.execute(
+        """
+        SELECT state_key, completed, resume_ms, state_changed_at,
+               manual_unwatched_at
+        FROM media_state
+        WHERE state_key LIKE ?
+        """,
+        (f'%"source_server": "{source_server or ""}"%',),
+    ).fetchall()
+    rows += connection.execute(
+        """
+        SELECT state_key, completed, resume_ms, state_changed_at,
+               manual_unwatched_at
+        FROM media_state
+        WHERE state_key NOT LIKE '%"source_server":%'
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            identity = json.loads(row[0])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if _identities_match(item, identity):
+            return row
     return None
+
+
+def _identities_match(item: MediaItem, stored_identity: dict[str, Any]) -> bool:
+    if set(item.identifiers.locations).intersection(
+        stored_identity.get("locations", [])
+    ):
+        return True
+    for field in ("imdb_id", "tvdb_id", "tmdb_id"):
+        value = getattr(item.identifiers, field)
+        if value and value == stored_identity.get(field):
+            return True
+    return item.identifiers.title == stored_identity.get("title")
 
 
 def _find_pending(index: dict[str, Any], item: MediaItem) -> tuple | None:
