@@ -524,8 +524,8 @@ class JellyfinEmby:
             if library_data.movies:
                 jellyfin_search = self.query(
                     f"/Users/{user_id}/Items"
-                    + f"?SortBy=SortName&SortOrder=Ascending&Recursive=True&ParentId={library_id}"
-                    + "&Fields=ItemCounts,ProviderIds,Path&IncludeItemTypes=Movie",
+                    + f"?userId={user_id}&SortBy=SortName&SortOrder=Ascending&Recursive=True&ParentId={library_id}"
+                    + "&Fields=ItemCounts,ProviderIds,Path,UserData&IncludeItemTypes=Movie",
                     "get",
                 )
 
@@ -556,6 +556,12 @@ class JellyfinEmby:
                             )
 
                             if stored_movie.status.completed:
+                                current_data = jellyfin_video.get("UserData") or {}
+                                if (
+                                    current_data.get("Played")
+                                    and not current_data.get("PlaybackPositionTicks", 0)
+                                ):
+                                    break
                                 msg = f"{self.server_type}: {jellyfin_video.get('Name')} as watched for {user_name} in {library_name}"
                                 if not dryrun:
                                     user_data_payload: dict[str, Any] = {
@@ -581,7 +587,51 @@ class JellyfinEmby:
                                         self.env, "MARK_FILE", "mark.log"
                                     ),
                                 )
+                            elif stored_movie.status.manually_unwatched:
+                                current_data = jellyfin_video.get("UserData") or {}
+                                if (
+                                    not current_data.get("Played")
+                                    and current_data.get("PlaybackPositionTicks", 0)
+                                    <= 100_000_000
+                                ):
+                                    break
+                                msg = f"{self.server_type}: {jellyfin_video.get('Name')} as unwatched for {user_name} in {library_name}"
+
+                                if not dryrun:
+                                    user_data_payload: dict[str, Any] = {
+                                        "PlayCount": 0,
+                                        "Played": False,
+                                        "PlaybackPositionTicks": 0,
+                                        "LastPlayedDate": viewed_date,
+                                    }
+                                    self.query(
+                                        f"/Users/{user_id}/Items/{jellyfin_video_id}/UserData",
+                                        "post",
+                                        json=user_data_payload,
+                                    )
+
+                                logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
+                                log_marked(
+                                    self.server_type,
+                                    self.server_name,
+                                    user_name,
+                                    library_name,
+                                    jellyfin_video.get("Name"),
+                                    mark_file=get_env_value(
+                                        self.env, "MARK_FILE", "mark.log"
+                                    ),
+                                )
                             elif self.update_partial:
+                                current_data = jellyfin_video.get("UserData") or {}
+                                if (
+                                    not current_data.get("Played")
+                                    and abs(
+                                        current_data.get("PlaybackPositionTicks", 0) // 10_000
+                                        - stored_movie.status.time
+                                    )
+                                    <= 10_000
+                                ):
+                                    break
                                 msg = f"{self.server_type}: {jellyfin_video.get('Name')} as partially watched for {floor(stored_movie.status.time / 60_000)} minutes for {user_name} in {library_name}"
 
                                 if not dryrun:
@@ -610,6 +660,7 @@ class JellyfinEmby:
                                         self.env, "MARK_FILE", "mark.log"
                                     ),
                                 )
+                            break
                         else:
                             logger.trace(
                                 f"{self.server_type}: Skipping movie {jellyfin_video.get('Name')} as it is not in mark list for {user_name}",
@@ -619,7 +670,7 @@ class JellyfinEmby:
             if library_data.series:
                 jellyfin_search = self.query(
                     f"/Users/{user_id}/Items"
-                    + f"?SortBy=SortName&SortOrder=Ascending&Recursive=True&ParentId={library_id}"
+                    + f"?userId={user_id}&SortBy=SortName&SortOrder=Ascending&Recursive=True&ParentId={library_id}"
                     + "&Fields=ItemCounts,ProviderIds,Path&IncludeItemTypes=Series",
                     "get",
                 )
@@ -651,7 +702,7 @@ class JellyfinEmby:
                             jellyfin_show_id = jellyfin_show.get("Id")
                             jellyfin_episodes = self.query(
                                 f"/Shows/{jellyfin_show_id}/Episodes"
-                                + f"?userId={user_id}&Fields=ItemCounts,ProviderIds,Path",
+                                + f"?userId={user_id}&Fields=ItemCounts,ProviderIds,Path,UserData",
                                 "get",
                             )
 
@@ -686,6 +737,14 @@ class JellyfinEmby:
                                         )
 
                                         if stored_ep.status.completed:
+                                            current_data = jellyfin_episode.get("UserData") or {}
+                                            if (
+                                                current_data.get("Played")
+                                                and not current_data.get(
+                                                    "PlaybackPositionTicks", 0
+                                                )
+                                            ):
+                                                break
                                             msg = (
                                                 f"{self.server_type}: {jellyfin_episode.get('SeriesName')} {jellyfin_episode.get('SeasonName')} Episode {jellyfin_episode.get('IndexNumber')} {jellyfin_episode.get('Name')}"
                                                 + f" as watched for {user_name} in {library_name}"
@@ -717,7 +776,62 @@ class JellyfinEmby:
                                                     self.env, "MARK_FILE", "mark.log"
                                                 ),
                                             )
+                                        elif stored_ep.status.manually_unwatched:
+                                            current_data = jellyfin_episode.get("UserData") or {}
+                                            if (
+                                                not current_data.get("Played")
+                                                and current_data.get(
+                                                    "PlaybackPositionTicks", 0
+                                                )
+                                                <= 100_000_000
+                                            ):
+                                                break
+                                            msg = (
+                                                f"{self.server_type}: {jellyfin_episode.get('SeriesName')} {jellyfin_episode.get('SeasonName')} Episode {jellyfin_episode.get('IndexNumber')} {jellyfin_episode.get('Name')}"
+                                                + f" as unwatched for {user_name} in {library_name}"
+                                            )
+
+                                            if not dryrun:
+                                                user_data_payload: dict[str, Any] = {
+                                                    "PlayCount": 0,
+                                                    "Played": False,
+                                                    "PlaybackPositionTicks": 0,
+                                                    "LastPlayedDate": viewed_date,
+                                                }
+                                                self.query(
+                                                    f"/Users/{user_id}/Items/{jellyfin_episode_id}/UserData",
+                                                    "post",
+                                                    json=user_data_payload,
+                                                )
+
+                                            logger.success(
+                                                f"{'[DRYRUN] ' if dryrun else ''}{msg}"
+                                            )
+                                            log_marked(
+                                                self.server_type,
+                                                self.server_name,
+                                                user_name,
+                                                library_name,
+                                                jellyfin_episode.get("SeriesName"),
+                                                jellyfin_episode.get("Name"),
+                                                mark_file=get_env_value(
+                                                    self.env, "MARK_FILE", "mark.log"
+                                                ),
+                                            )
                                         elif self.update_partial:
+                                            current_data = jellyfin_episode.get("UserData") or {}
+                                            if (
+                                                not current_data.get("Played")
+                                                and abs(
+                                                    current_data.get(
+                                                        "PlaybackPositionTicks", 0
+                                                    )
+                                                    // 10_000
+                                                    - stored_ep.status.time
+                                                )
+                                                <= 10_000
+                                            ):
+                                                break
                                             msg = (
                                                 f"{self.server_type}: {jellyfin_episode.get('SeriesName')} {jellyfin_episode.get('SeasonName')} Episode {jellyfin_episode.get('IndexNumber')} {jellyfin_episode.get('Name')}"
                                                 + f" as partially watched for {floor(stored_ep.status.time / 60_000)} minutes for {user_name} in {library_name}"
@@ -754,6 +868,7 @@ class JellyfinEmby:
                                                     self.env, "MARK_FILE", "mark.log"
                                                 ),
                                             )
+                                        break
                                     else:
                                         logger.trace(
                                             f"{self.server_type}: Skipping episode {jellyfin_episode.get('Name')} as it is not in mark list for {user_name}",

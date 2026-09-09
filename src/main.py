@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import traceback
+from copy import deepcopy
 from time import perf_counter, sleep
 
 from dotenv import dotenv_values
@@ -23,6 +24,7 @@ from src.watched import (
     apply_manual_unwatched_state,
     cleanup_watched,
     initialize_watched_state_db,
+    load_previously_watched_keys,
     merge_server_watched,
 )
 
@@ -176,14 +178,12 @@ def main_loop(env: dict[str, str | float | None]) -> None:
     # Create server connections
     logger.info("Creating server connections")
     servers = generate_server_connections(env)
+    snapshot_cache: dict[tuple[int, tuple[str, ...], tuple[str, ...]], dict] = {}
 
     for server_1 in servers:
         # If server is the final server in the list, then we are done with the loop
         if server_1 == servers[-1]:
             break
-
-        # Store a copy of server_1_watched that way it can be used multiple times without having to regather everyones watch history every single time
-        server_1_watched = None
 
         # Start server_2 at the next server in the list
         for server_2 in servers[servers.index(server_1) + 1 :]:
@@ -217,13 +217,47 @@ def main_loop(env: dict[str, str | float | None]) -> None:
             logger.info("Creating watched lists")
             initialize_watched_state_db(env)
             env["_watched_state_source"] = server_1.server_type
-            server_1_watched = server_1.get_watched(
-                server_1_users, server_1_libraries, server_1_watched
+            server_1_user_key = tuple(
+                sorted(
+                    user.username.lower() if hasattr(user, "username") else str(user).lower()
+                    for user in server_1_users
+                )
             )
+            server_1_key = (
+                id(server_1),
+                server_1_user_key,
+                tuple(sorted(server_1_libraries)),
+            )
+            if server_1_key not in snapshot_cache:
+                env["_watched_state_keys"] = load_previously_watched_keys(
+                    env, server_1.server_type
+                )
+                snapshot_cache[server_1_key] = server_1.get_watched(
+                    server_1_users, server_1_libraries
+                )
+            server_1_watched = deepcopy(snapshot_cache[server_1_key])
             logger.info("Finished creating watched list server 1")
 
             env["_watched_state_source"] = server_2.server_type
-            server_2_watched = server_2.get_watched(server_2_users, server_2_libraries)
+            server_2_user_key = tuple(
+                sorted(
+                    user.lower() if isinstance(user, str) else str(user).lower()
+                    for user in server_2_users
+                )
+            )
+            server_2_key = (
+                id(server_2),
+                server_2_user_key,
+                tuple(sorted(server_2_libraries)),
+            )
+            if server_2_key not in snapshot_cache:
+                env["_watched_state_keys"] = load_previously_watched_keys(
+                    env, server_2.server_type
+                )
+                snapshot_cache[server_2_key] = server_2.get_watched(
+                    server_2_users, server_2_libraries
+                )
+            server_2_watched = deepcopy(snapshot_cache[server_2_key])
             logger.info("Finished creating watched list server 2")
 
             server_1_watched = apply_manual_unwatched_state(

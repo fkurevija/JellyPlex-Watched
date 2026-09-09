@@ -33,6 +33,7 @@ class WatchedStatus(BaseModel):
     completed: bool
     time: int
     viewed_date: datetime
+    manually_unwatched: bool = False
 
 
 class MediaItem(BaseModel):
@@ -158,6 +159,12 @@ def was_previously_watched(
     item: MediaItem,
     env: dict[str, str | float | None],
 ) -> bool:
+    cached_keys = env.get("_watched_state_keys")
+    if isinstance(cached_keys, set):
+        return mediaitem_state_key(
+            item, str(env.get("_watched_state_source", ""))
+        ) in cached_keys
+
     db_path = initialize_watched_state_db(env)
     with sqlite3.connect(db_path) as connection:
         row = connection.execute(
@@ -165,6 +172,25 @@ def was_previously_watched(
             (mediaitem_state_key(item, str(env.get("_watched_state_source", ""))),),
         ).fetchone()
     return bool(row and row[0])
+
+
+def load_previously_watched_keys(
+    env: dict[str, str | float | None],
+    source_server: str | None,
+) -> set[str]:
+    """Load completed state keys once for a server snapshot."""
+    db_path = initialize_watched_state_db(env)
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT state_key
+            FROM media_state
+            WHERE completed = 1 AND state_key LIKE ?
+            """,
+            (f'%"source_server": "{source_server or ""}"%',),
+        ).fetchall()
+
+    return {row[0] for row in rows}
 
 
 def _apply_manual_unwatched_item_state_db(
@@ -187,6 +213,7 @@ def _apply_manual_unwatched_item_state_db(
     ):
         item.status.viewed_date = now
         item.status.time = 0
+        item.status.manually_unwatched = True
         manual_unwatched_at = now.isoformat()
 
     connection.execute(

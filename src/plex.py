@@ -75,8 +75,13 @@ def extract_identifiers_from_item(
 
     if generate_guids:
         if not guids:
+            location_text = (
+                f", locations: {' '.join(item.locations)}"
+                if generate_locations
+                else ""
+            )
             logger.debug(
-                f"Plex: {item.title} has no guids{f', locations: {" ".join(item.locations)}' if generate_locations else ''}",
+                f"Plex: {item.title} has no guids{location_text}",
             )
 
     if generate_locations:
@@ -243,27 +248,18 @@ class Plex:
 
             if library.type == "movie":
                 for video in library_videos.search():
+                    video_item = get_mediaitem(
+                        video,
+                        video.isWatched,
+                        self.generate_guids,
+                        self.generate_locations,
+                    )
                     if (
                         video.isWatched
                         or video.viewOffset >= 60000
-                        or was_previously_watched(
-                            get_mediaitem(
-                                video,
-                                video.isWatched,
-                                self.generate_guids,
-                                self.generate_locations,
-                            ),
-                            self.env,
-                        )
+                        or was_previously_watched(video_item, self.env)
                     ):
-                        watched.movies.append(
-                            get_mediaitem(
-                                video,
-                                video.isWatched,
-                                self.generate_guids,
-                                self.generate_locations,
-                            )
-                        )
+                        watched.movies.append(video_item)
 
             elif library.type == "show":
                 # Keep track of processed shows to reduce duplicate shows
@@ -411,6 +407,8 @@ class Plex:
                         # If the stored movie is marked as watched (or has enough progress),
                         # update the Plex movie accordingly.
                         if stored_movie.status.completed:
+                            if plex_movie.isWatched and plex_movie.viewOffset < 60_000:
+                                break
                             msg = f"Plex: {plex_movie.title} as watched for {user.title} in {library_name}"
                             if not dryrun:
                                 try:
@@ -434,7 +432,38 @@ class Plex:
                                     self.env, "MARK_FILE", "mark.log"
                                 ),
                             )
+                        elif stored_movie.status.manually_unwatched:
+                            if not plex_movie.isWatched and plex_movie.viewOffset <= 10_000:
+                                break
+                            msg = f"Plex: {plex_movie.title} as unwatched for {user.title} in {library_name}"
+                            if not dryrun:
+                                try:
+                                    plex_movie.markUnwatched()
+                                    plex_movie.updateTimeline(0)
+                                except Exception as e:
+                                    logger.error(
+                                        f"Plex: Failed to mark {plex_movie.title} as unwatched, Error: {e}"
+                                    )
+                                    continue
+
+                            logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
+                            log_marked(
+                                "Plex",
+                                user_plex.friendlyName,
+                                user.title,
+                                library_name,
+                                plex_movie.title,
+                                mark_file=get_env_value(
+                                    self.env, "MARK_FILE", "mark.log"
+                                ),
+                            )
                         else:
+                            if (
+                                not plex_movie.isWatched
+                                and abs(plex_movie.viewOffset - stored_movie.status.time)
+                                <= 10_000
+                            ):
+                                break
                             msg = f"Plex: {plex_movie.title} as partially watched for {floor(stored_movie.status.time / 60_000)} minutes for {user.title} in {library_name}"
                             if not dryrun:
                                 try:
@@ -490,6 +519,11 @@ class Plex:
                                     plex_episode_identifiers, stored_ep.identifiers
                                 ):
                                     if stored_ep.status.completed:
+                                        if (
+                                            plex_episode.isWatched
+                                            and plex_episode.viewOffset < 60_000
+                                        ):
+                                            break
                                         msg = f"Plex: {plex_show.title} {plex_episode.title} as watched for {user.title} in {library_name}"
                                         if not dryrun:
                                             try:
@@ -514,7 +548,47 @@ class Plex:
                                                 self.env, "MARK_FILE", "mark.log"
                                             ),
                                         )
+                                    elif stored_ep.status.manually_unwatched:
+                                        if (
+                                            not plex_episode.isWatched
+                                            and plex_episode.viewOffset <= 10_000
+                                        ):
+                                            break
+                                        msg = f"Plex: {plex_show.title} {plex_episode.title} as unwatched for {user.title} in {library_name}"
+                                        if not dryrun:
+                                            try:
+                                                plex_episode.markUnwatched()
+                                                plex_episode.updateTimeline(0)
+                                            except Exception as e:
+                                                logger.error(
+                                                    f"Plex: Failed to mark {plex_show.title} {plex_episode.title} as unwatched, Error: {e}"
+                                                )
+                                                continue
+
+                                        logger.success(
+                                            f"{'[DRYRUN] ' if dryrun else ''}{msg}"
+                                        )
+                                        log_marked(
+                                            "Plex",
+                                            user_plex.friendlyName,
+                                            user.title,
+                                            library_name,
+                                            plex_show.title,
+                                            plex_episode.title,
+                                            mark_file=get_env_value(
+                                                self.env, "MARK_FILE", "mark.log"
+                                            ),
+                                        )
                                     else:
+                                        if (
+                                            not plex_episode.isWatched
+                                            and abs(
+                                                plex_episode.viewOffset
+                                                - stored_ep.status.time
+                                            )
+                                            <= 10_000
+                                        ):
+                                            break
                                         msg = f"Plex: {plex_show.title} {plex_episode.title} as partially watched for {floor(stored_ep.status.time / 60_000)} minutes for {user.title} in {library_name}"
                                         if not dryrun:
                                             try:
