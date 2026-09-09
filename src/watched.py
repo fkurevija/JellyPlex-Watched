@@ -197,7 +197,11 @@ def was_previously_watched(
         row = _find_indexed(
             item, state_index, str(env.get("_watched_state_source", ""))
         )
-        if row is None:
+        if (
+            row is None
+            and not item.status.completed
+            and item.status.time <= 60_000
+        ):
             row = _find_any_indexed(item, state_index)
         return row is not None
 
