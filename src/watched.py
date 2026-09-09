@@ -194,9 +194,20 @@ def was_previously_watched(
 ) -> bool:
     cached_keys = env.get("_watched_state_keys")
     if isinstance(cached_keys, set):
-        return mediaitem_state_key(
-            item, str(env.get("_watched_state_source", ""))
-        ) in cached_keys
+        source_server = str(env.get("_watched_state_source", ""))
+        exact_key = mediaitem_state_key(item, source_server)
+        if exact_key in cached_keys:
+            return True
+        for state_key in cached_keys:
+            try:
+                if (
+                    f'"source_server": "{source_server}"' in state_key
+                    and _identities_match(item, json.loads(state_key))
+                ):
+                    return True
+            except json.JSONDecodeError:
+                continue
+        return False
 
     db_path = initialize_watched_state_db(env)
     with sqlite3.connect(db_path) as connection:
@@ -226,30 +237,84 @@ def load_previously_watched_keys(
     return {row[0] for row in rows}
 
 
+def _identities_match(item: MediaItem, stored_identity: dict[str, Any]) -> bool:
+    if set(item.identifiers.locations).intersection(
+        stored_identity.get("locations", [])
+    ):
+        return True
+    for field in ("imdb_id", "tvdb_id", "tmdb_id"):
+        value = getattr(item.identifiers, field)
+        if value and value == stored_identity.get(field):
+            return True
+    return item.identifiers.title == stored_identity.get("title")
+
+
+def _find_state_row(
+    connection: sqlite3.Connection,
+    item: MediaItem,
+    source_server: str | None,
+) -> tuple | None:
+    rows = connection.execute(
+        """
+        SELECT state_key, completed, resume_ms, state_changed_at,
+               manual_unwatched_at
+        FROM media_state
+        WHERE state_key LIKE ?
+        """,
+        (
+            f'%"source_server": "{source_server or ""}"%',
+        ),
+    ).fetchall()
+    for row in rows:
+        try:
+            if _identities_match(item, json.loads(row[0])):
+                return row
+        except json.JSONDecodeError:
+            continue
+    legacy_rows = connection.execute(
+            """
+            SELECT state_key, completed, resume_ms, state_changed_at,
+                   manual_unwatched_at
+            FROM media_state
+            WHERE state_key NOT LIKE '%"source_server":%'
+            """
+    ).fetchall()
+    for row in legacy_rows:
+        try:
+            if _identities_match(item, json.loads(row[0])):
+                return row
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def _apply_manual_unwatched_item_state_db(
     connection: sqlite3.Connection,
     item: MediaItem,
     source_server: str | None,
 ) -> None:
     key = mediaitem_state_key(item, source_server)
-    previous = connection.execute(
-        """
-        SELECT completed, resume_ms, state_changed_at, manual_unwatched_at
-        FROM media_state
-        WHERE state_key = ?
-        """,
-        (key,),
-    ).fetchone()
+    previous = _find_state_row(connection, item, source_server)
+    state_key = previous[0] if previous else key
     now = datetime.now(timezone.utc)
     manual_unwatched_at = None
-    pending = connection.execute(
+    pending = None
+    pending_key = None
+    for candidate in connection.execute(
         """
-        SELECT expected_completed, expected_resume_ms
+        SELECT state_key, expected_completed, expected_resume_ms
         FROM pending_sync
-        WHERE state_key = ? AND destination_server = ?
+        WHERE destination_server = ?
         """,
-        (mediaitem_identity_key(item), source_server or ""),
-    ).fetchone()
+        (source_server or "",),
+    ).fetchall():
+        try:
+            if _identities_match(item, json.loads(candidate[0])):
+                pending_key = candidate[0]
+                pending = candidate[1:]
+                break
+        except json.JSONDecodeError:
+            continue
     pending_matches = bool(
         pending
         and bool(pending[0]) == item.status.completed
@@ -302,7 +367,7 @@ def _apply_manual_unwatched_item_state_db(
             state_changed_at = excluded.state_changed_at
         """,
         (
-            key,
+            state_key,
             int(item.status.completed),
             item.status.time,
             item.status.viewed_date.isoformat(),
@@ -317,7 +382,7 @@ def _apply_manual_unwatched_item_state_db(
             DELETE FROM pending_sync
             WHERE state_key = ? AND destination_server = ?
             """,
-            (mediaitem_identity_key(item), source_server or ""),
+            (pending_key or mediaitem_identity_key(item), source_server or ""),
         )
 
 
