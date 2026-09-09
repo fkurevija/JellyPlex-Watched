@@ -27,6 +27,13 @@ def log_marked(
     if duration:
         output += f"/{duration}"
 
+    existing = set()
+    if os.path.exists(mark_file):
+        with open(mark_file, encoding="utf-8") as file:
+            existing = {line.rstrip("\n") for line in file}
+    if output in existing:
+        return
+
     with open(mark_file, "a", encoding="utf-8") as file:
         file.write(output + "\n")
 
