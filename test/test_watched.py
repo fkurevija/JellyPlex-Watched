@@ -1168,6 +1168,34 @@ def test_cross_server_state_does_not_collect_completed_items(tmp_path):
     assert not was_previously_watched(watched_item, env)
 
 
+def test_cross_server_fallback_ignores_partial_baseline(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Cross Server Partial Item",
+        locations=("cross-server-partial-item.mkv",),
+        imdb_id="tt7654333",
+    )
+    partial_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=240_000,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    current_unwatched = partial_item.model_copy(deep=True)
+    current_unwatched.status.time = 0
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[partial_item])})},
+        env,
+        "Plex",
+    )
+    env["_watched_state_index"] = load_state_index(env, "Emby")
+
+    assert not was_previously_watched(current_unwatched, env)
+
+
 def test_source_exact_state_precedes_flexible_identity_match(tmp_path):
     identifiers = MediaIdentifiers(
         title="Exact Source Item",

@@ -376,7 +376,9 @@ def _find_any_indexed(
     locations, imdb_id, tvdb_id, tmdb_id, title = _identity_values(item)
     for location in locations:
         if location in index["by_any_location"]:
-            return index["by_any_location"][location][0]
+            row = index["by_any_location"][location][0]
+            if bool(row[1]):
+                return row
     for field, value in (
         ("imdb_id", imdb_id),
         ("tvdb_id", tvdb_id),
@@ -384,7 +386,9 @@ def _find_any_indexed(
         ("title", title),
     ):
         if value and value in index[f"by_any_{field}"]:
-            return index[f"by_any_{field}"][value][0]
+            row = index[f"by_any_{field}"][value][0]
+            if bool(row[1]):
+                return row
     return None
 
 
