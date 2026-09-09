@@ -275,6 +275,15 @@ def compare_media_items(
         to_aware_utc(media2.status.viewed_date),
     )
 
+    # A manual unwatched transition is an explicit user action and must win
+    # over a stale watched or partial-progress state on another server.
+    if media1.status.manually_unwatched != media2.status.manually_unwatched:
+        return (
+            Ord.A_BETTER
+            if media1.status.manually_unwatched
+            else Ord.B_BETTER
+        )
+
     # If both are completed, it's a tie.
     if media1.status.completed and media2.status.completed:
         logger.trace("Both media items are completed. Considering it a tie.")

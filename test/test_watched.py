@@ -25,8 +25,10 @@ from src.watched import (
     WatchedStatus,
     apply_manual_unwatched_state,
     cleanup_watched,
+    compare_media_items,
     initialize_watched_state_db,
     mediaitem_state_key,
+    Ord,
 )
 
 viewed_date = datetime.today()
@@ -784,6 +786,34 @@ def test_watched_state_is_scoped_to_source_server(tmp_path):
     assert unwatched_item.status.viewed_date == datetime(
         2024, 1, 1, tzinfo=timezone.utc
     )
+
+
+def test_manual_unwatched_state_wins_over_partial_progress():
+    identifiers = MediaIdentifiers(
+        title="Reset Item",
+        locations=("Reset Item.mkv",),
+        imdb_id="tt7654323",
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+            manually_unwatched=True,
+        ),
+    )
+    partial_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=300_000,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+
+    assert compare_media_items(unwatched_item, partial_item, {}) == Ord.A_BETTER
+    assert compare_media_items(partial_item, unwatched_item, {}) == Ord.B_BETTER
 
 
 # def test_mapping_cleanup_watched():
