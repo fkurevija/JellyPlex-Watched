@@ -270,12 +270,16 @@ def main_loop(env: dict[str, str | float | None]) -> None:
             server_2_watched = deepcopy(snapshot_cache[server_2_key])
             logger.info("Finished creating watched list server 2")
 
+            server_1_state_index = load_state_index(env, server_1.server_type)
+            state_index_cache[server_1.server_type] = server_1_state_index
             env["_watched_state_index"] = server_1_state_index
             if not server_1_snapshot_cached:
                 server_1_watched = apply_manual_unwatched_state(
                     server_1_watched, env, server_1.server_type
                 )
                 snapshot_cache[server_1_key] = deepcopy(server_1_watched)
+            server_2_state_index = load_state_index(env, server_2.server_type)
+            state_index_cache[server_2.server_type] = server_2_state_index
             env["_watched_state_index"] = server_2_state_index
             if not server_2_snapshot_cached:
                 server_2_watched = apply_manual_unwatched_state(

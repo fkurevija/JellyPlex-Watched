@@ -194,7 +194,9 @@ def was_previously_watched(
 ) -> bool:
     state_index = env.get("_watched_state_index")
     if isinstance(state_index, dict):
-        row = _find_indexed(item, state_index)
+        row = _find_indexed(
+            item, state_index, str(env.get("_watched_state_source", ""))
+        )
         return row is not None
 
     db_path = initialize_watched_state_db(env)
@@ -270,6 +272,7 @@ def load_state_index(
         ).fetchall()
 
     index: dict[str, Any] = {
+        "by_state_key": {},
         "by_location": {},
         "by_imdb_id": {},
         "by_tvdb_id": {},
@@ -283,6 +286,7 @@ def load_state_index(
         except json.JSONDecodeError:
             continue
         normalized = (row, identity)
+        index["by_state_key"].setdefault(row[0], normalized)
         for location in identity.get("locations", []):
             index["by_location"].setdefault(location, normalized)
         for field, index_name in (
@@ -313,7 +317,12 @@ def load_state_index(
 def _find_indexed(
     item: MediaItem,
     index: dict[str, Any],
+    source_server: str | None = None,
 ) -> tuple | None:
+    exact_key = mediaitem_state_key(item, source_server)
+    if exact_key in index["by_state_key"]:
+        return index["by_state_key"][exact_key][0]
+
     locations, imdb_id, tvdb_id, tmdb_id, title = _identity_values(item)
     for location in locations:
         if location in index["by_location"]:
@@ -340,6 +349,7 @@ def _index_state_row(
         return
 
     normalized = (row, identity)
+    state_index["by_state_key"][row[0]] = normalized
     for location in identity.get("locations", []):
         state_index["by_location"][location] = normalized
     for field, index_name in (
@@ -360,7 +370,7 @@ def _find_state_row(
     state_index: dict[str, Any] | None = None,
 ) -> tuple | None:
     if state_index is not None:
-        return _find_indexed(item, state_index)
+        return _find_indexed(item, state_index, source_server)
     return None
 
 
