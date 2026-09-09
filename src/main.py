@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import sys
 import traceback
 from copy import deepcopy
@@ -217,7 +218,14 @@ def main_loop(env: dict[str, str | float | None]) -> None:
             logger.info(f"Server 2 syncing libraries: {server_2_libraries}")
 
             logger.info("Creating watched lists")
-            initialize_watched_state_db(env)
+            state_db_path = initialize_watched_state_db(env)
+            with sqlite3.connect(state_db_path) as _state_conn:
+                _state_row_count = _state_conn.execute(
+                    "SELECT COUNT(*) FROM media_state"
+                ).fetchone()[0]
+            logger.info(
+                f"Watched state DB: {state_db_path} ({_state_row_count} stored rows)"
+            )
             env["_watched_state_source"] = server_1.server_type
             server_1_user_key = tuple(
                 sorted(
