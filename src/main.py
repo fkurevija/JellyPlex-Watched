@@ -244,6 +244,17 @@ def main_loop(env: dict[str, str | float | None]) -> None:
             server_1_watched = deepcopy(snapshot_cache[server_1_key])
             logger.info("Finished creating watched list server 1")
 
+            # Persist the source observation before collecting the destination.
+            # This lets the destination retain items that it reports as
+            # never-played but that were previously watched on the source.
+            if not server_1_snapshot_cached:
+                env["_watched_state_index"] = state_index_cache[server_1.server_type]
+                server_1_watched = apply_manual_unwatched_state(
+                    server_1_watched, env, server_1.server_type
+                )
+                snapshot_cache[server_1_key] = deepcopy(server_1_watched)
+                server_1_snapshot_cached = True
+
             env["_watched_state_source"] = server_2.server_type
             server_2_user_key = tuple(
                 sorted(
