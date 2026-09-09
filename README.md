@@ -15,6 +15,24 @@ Watched-state history is stored in SQLite at `WATCHED_STATE_DB` (default:
 `WATCHED_STATE_FILE`, it is migrated automatically the first time the SQLite
 database is initialized.
 
+### Persisting state in Docker
+
+Manual-unwatch propagation (detecting that an item was watched → unwatched
+so the change can sync to the other server) depends on comparing the current
+scan against the state recorded during the *previous* scan. If you run this
+container with `RUN_ONLY_ONCE=True` and a restart policy such as
+`unless-stopped`, the container exits after each run and Docker recreates it,
+which wipes the container's filesystem — including the SQLite state
+database, `log.log`, and `mark.log` — unless you mount a persistent volume.
+Without persisted state, every scan looks like the "first ever" comparison
+between servers, and unwatch actions can be silently overwritten by whichever
+server's watched state is processed first.
+
+To avoid this, mount a volume (see `docker-compose.yml` for an example
+mounting `./data:/app/data`) and point `WATCHED_STATE_DB` (and optionally
+`LOG_FILE`/`MARK_FILE`) at a path under that mounted directory, e.g.
+`WATCHED_STATE_DB=data/jellyplex-watched-state.db`.
+
 ## Features
 
 ### Plex

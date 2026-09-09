@@ -9,3 +9,11 @@ services:
       - PUID=1000
       - PGID=1000
     env_file: "./.env"
+    # Persist the watched-state database (and optionally log/mark files) across
+    # container restarts. Without this, RUN_ONLY_ONCE + restart:unless-stopped
+    # wipes state on every restart, breaking manual-unwatch detection which
+    # relies on comparing state between sync cycles. Point WATCHED_STATE_DB,
+    # LOG_FILE, and MARK_FILE in your .env at paths under data/ (e.g.
+    # WATCHED_STATE_DB=data/jellyplex-watched-state.db) for this to take effect.
+    volumes:
+      - ./data:/app/data
