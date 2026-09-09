@@ -831,6 +831,35 @@ def test_manual_unwatched_state_wins_over_partial_progress():
     assert compare_media_items(completed_item, unwatched_item, {}) == Ord.B_BETTER
 
 
+def test_completed_state_beats_newer_unknown_incomplete_state():
+    identifiers = MediaIdentifiers(title="Unknown Item")
+    completed_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    unknown_incomplete_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+
+    assert (
+        compare_media_items(completed_item, unknown_incomplete_item, {})
+        == Ord.A_BETTER
+    )
+    assert (
+        compare_media_items(unknown_incomplete_item, completed_item, {})
+        == Ord.B_BETTER
+    )
+
+
 def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
     identifiers = MediaIdentifiers(
         title="Propagated Reset",

@@ -691,6 +691,11 @@ def compare_media_items(
             else Ord.B_BETTER
         )
 
+    # An unknown incomplete item may have a newly generated viewed date.
+    # Completion must take priority unless the item is explicitly manually unwatched.
+    if media1.status.completed != media2.status.completed:
+        return Ord.A_BETTER if media1.status.completed else Ord.B_BETTER
+
     # If both are completed, it's a tie.
     if media1.status.completed and media2.status.completed:
         logger.trace("Both media items are completed. Considering it a tie.")
