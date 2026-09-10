@@ -255,6 +255,10 @@ class Plex:
                         self.generate_guids,
                         self.generate_locations,
                     )
+                    logger.trace(
+                        f"Plex: {video.title} isWatched={video.isWatched} "
+                        f"viewOffset={video.viewOffset}"
+                    )
                     if (
                         video.isWatched
                         or video.viewOffset >= 60000
@@ -279,6 +283,10 @@ class Plex:
                             episode.isWatched,
                             self.generate_guids,
                             self.generate_locations,
+                        )
+                        logger.trace(
+                            f"Plex: {show.title} {episode.title} "
+                            f"isWatched={episode.isWatched} viewOffset={episode.viewOffset}"
                         )
                         if (
                             episode.isWatched
