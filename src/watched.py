@@ -729,6 +729,13 @@ def compare_media_items(
             and unwatched_manual_unwatched_at is not None
             and other_state_changed_at > unwatched_manual_unwatched_at
         )
+        logger.trace(
+            "Manual-unwatched priority check: "
+            f"other.completed={other_media.status.completed}, "
+            f"other.state_changed_at={other_state_changed_at}, "
+            f"unwatched.manual_unwatched_at={unwatched_manual_unwatched_at}, "
+            f"rewatch_overrides={rewatch_overrides}"
+        )
         if not rewatch_overrides:
             return (
                 Ord.A_BETTER
