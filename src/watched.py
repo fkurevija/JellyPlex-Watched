@@ -35,6 +35,12 @@ class WatchedStatus(BaseModel):
     viewed_date: datetime
     manually_unwatched: bool = False
     manual_unwatched_at: datetime | None = None
+    # True when this observation represents a genuine transition from
+    # not-completed to completed for this item on this source server (per the
+    # watched-state DB), as opposed to a stale/unchanged completed state. Used
+    # to let a fresh rewatch on one server override a stale manual-unwatched
+    # marker recorded for the same item on the other server.
+    newly_completed: bool = False
 
 
 class MediaItem(BaseModel):
@@ -517,6 +523,12 @@ def _apply_manual_unwatched_item_state_db(
         and abs(pending[1] - item.status.time) <= 10_000
     )
 
+    # A genuine transition from not-completed to completed for this item on
+    # this source, as opposed to an unchanged/stale completed observation.
+    item.status.newly_completed = bool(
+        item.status.completed and previous and not bool(previous[1])
+    )
+
     if (
         previous
         and previous[4]
@@ -694,12 +706,19 @@ def compare_media_items(
     # over stale watched or partial-progress state. A watched state restored
     # by the user is propagated through pending_sync and is not marked as a
     # manual-unwatched transition, so it can still become the new baseline.
+    # Exception: if the other (not manually-unwatched) item just transitioned
+    # to completed on its own server, that's a fresh, deliberate rewatch and
+    # must be allowed to override the stale manual-unwatched marker rather
+    # than being silently reverted every cycle.
     if media1.status.manually_unwatched != media2.status.manually_unwatched:
-        return (
-            Ord.A_BETTER
-            if media1.status.manually_unwatched
-            else Ord.B_BETTER
-        )
+        other_is_media1 = not media1.status.manually_unwatched
+        other_media = media1 if other_is_media1 else media2
+        if not other_media.status.newly_completed:
+            return (
+                Ord.A_BETTER
+                if media1.status.manually_unwatched
+                else Ord.B_BETTER
+            )
 
     # An unknown incomplete item may have a newly generated viewed date.
     # Completion must take priority unless the item is explicitly manually unwatched.

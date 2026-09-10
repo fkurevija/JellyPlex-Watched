@@ -1368,6 +1368,114 @@ def test_cross_server_observation_does_not_create_manual_unwatched_state(tmp_pat
     assert not emby_item.status.manually_unwatched
 
 
+def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path):
+    """
+    Regression test: once a manual unwatch is detected and propagated (e.g.
+    Jellyfin -> Plex), the manual-unwatched marker used to stick forever on
+    the still-untouched server (Jellyfin), meaning a later, genuine rewatch
+    on the other server (Plex) was silently reverted every cycle instead of
+    propagating. A fresh completed transition on the other server must be
+    allowed to win instead.
+    """
+    identifiers = MediaIdentifiers(
+        title="Sticky Manual Unwatched",
+        locations=("sticky-manual-unwatched.mkv",),
+        imdb_id="tt7654336",
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    # Cycle 1: both servers show the item as watched (established baseline).
+    plex_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    jellyfin_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_watched])})},
+        env,
+        "Plex",
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_watched])})},
+        env,
+        "Jellyfin",
+    )
+
+    # Cycle 2: user unwatches on Jellyfin only; Plex is still watched.
+    jellyfin_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+    assert jellyfin_unwatched.status.manually_unwatched
+    plex_synced_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_synced_unwatched])})},
+        env,
+        "Plex",
+    )
+
+    # Cycle 3: Jellyfin is still untouched (incomplete), so its manual-unwatched
+    # marker keeps getting re-affirmed by design.
+    jellyfin_still_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_still_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+    assert jellyfin_still_unwatched.status.manually_unwatched
+
+    # The user now rewatches on Plex: a genuine transition from incomplete to
+    # completed for Plex's own source-scoped state.
+    plex_rewatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_rewatched])})},
+        env,
+        "Plex",
+    )
+    assert plex_rewatched.status.newly_completed
+    assert not plex_rewatched.status.manually_unwatched
+
+    # The fresh Plex rewatch must win over Jellyfin's stale manual-unwatched
+    # marker instead of being reverted back to unwatched.
+    assert (
+        compare_media_items(plex_rewatched, jellyfin_still_unwatched, {})
+        == Ord.A_BETTER
+    )
+    assert (
+        compare_media_items(jellyfin_still_unwatched, plex_rewatched, {})
+        == Ord.B_BETTER
+    )
+
+
 def test_manual_unwatched_detection_ignores_other_source_baseline(tmp_path):
     identifiers = MediaIdentifiers(
         title="Source Scoped Baseline",
