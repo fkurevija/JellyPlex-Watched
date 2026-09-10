@@ -1461,7 +1461,6 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
         env,
         "Plex",
     )
-    assert plex_rewatched.status.newly_completed
     assert not plex_rewatched.status.manually_unwatched
 
     # The fresh Plex rewatch must win over Jellyfin's stale manual-unwatched
@@ -1472,6 +1471,41 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
     )
     assert (
         compare_media_items(jellyfin_still_unwatched, plex_rewatched, {})
+        == Ord.B_BETTER
+    )
+
+    # Cycle 5+: even several cycles later (both sides observed again,
+    # unchanged), the override must still hold. A transient one-cycle flag
+    # would lose this after the first cycle; the persisted state_changed_at
+    # timestamp must not.
+    jellyfin_still_unwatched_again = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_still_unwatched_again])})},
+        env,
+        "Jellyfin",
+    )
+    plex_rewatched_again = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_rewatched_again])})},
+        env,
+        "Plex",
+    )
+    assert (
+        compare_media_items(plex_rewatched_again, jellyfin_still_unwatched_again, {})
+        == Ord.A_BETTER
+    )
+    assert (
+        compare_media_items(jellyfin_still_unwatched_again, plex_rewatched_again, {})
         == Ord.B_BETTER
     )
 

@@ -35,12 +35,13 @@ class WatchedStatus(BaseModel):
     viewed_date: datetime
     manually_unwatched: bool = False
     manual_unwatched_at: datetime | None = None
-    # True when this observation represents a genuine transition from
-    # not-completed to completed for this item on this source server (per the
-    # watched-state DB), as opposed to a stale/unchanged completed state. Used
-    # to let a fresh rewatch on one server override a stale manual-unwatched
-    # marker recorded for the same item on the other server.
-    newly_completed: bool = False
+    # Timestamp of the last time this item's completed/resume state materially
+    # changed for this source server, per the watched-state DB (mirrors the
+    # media_state.state_changed_at column). Used to let a rewatch that
+    # happened AFTER the other server's manual-unwatch timestamp override a
+    # stale manual-unwatched marker, no matter how many cycles have passed
+    # since either event was first recorded.
+    state_changed_at: datetime | None = None
 
 
 class MediaItem(BaseModel):
@@ -523,12 +524,6 @@ def _apply_manual_unwatched_item_state_db(
         and abs(pending[1] - item.status.time) <= 10_000
     )
 
-    # A genuine transition from not-completed to completed for this item on
-    # this source, as opposed to an unchanged/stale completed observation.
-    item.status.newly_completed = bool(
-        item.status.completed and previous and not bool(previous[1])
-    )
-
     if (
         previous
         and previous[4]
@@ -536,9 +531,15 @@ def _apply_manual_unwatched_item_state_db(
         and item.status.time <= 10_000
         and not pending_matches
     ):
+        # Re-affirming an already-established manual-unwatched state. Preserve
+        # the ORIGINAL detection timestamp rather than bumping it to `now` -
+        # otherwise this marker's effective timestamp would advance forever
+        # on every cycle it stays unwatched, making it perpetually "newer"
+        # than any rewatch on the other server and permanently defeating the
+        # state_changed_at-based override below.
         item.status.time = 0
         item.status.manually_unwatched = True
-        item.status.manual_unwatched_at = now
+        item.status.manual_unwatched_at = datetime.fromisoformat(previous[4])
 
     if (
         previous
@@ -561,6 +562,9 @@ def _apply_manual_unwatched_item_state_db(
         or bool(previous[1]) != item.status.completed
         or abs(previous[2] - item.status.time) > 10_000
         else previous[3]
+    )
+    item.status.state_changed_at = (
+        datetime.fromisoformat(state_changed_at) if state_changed_at else None
     )
     connection.execute(
         """
@@ -706,14 +710,26 @@ def compare_media_items(
     # over stale watched or partial-progress state. A watched state restored
     # by the user is propagated through pending_sync and is not marked as a
     # manual-unwatched transition, so it can still become the new baseline.
-    # Exception: if the other (not manually-unwatched) item just transitioned
-    # to completed on its own server, that's a fresh, deliberate rewatch and
-    # must be allowed to override the stale manual-unwatched marker rather
-    # than being silently reverted every cycle.
+    # Exception: if the other (not manually-unwatched) item became completed
+    # on its own server AFTER the manual-unwatch happened (comparing the
+    # persisted state_changed_at/manual_unwatched_at timestamps, not a
+    # transient single-cycle flag), that's a fresh, deliberate rewatch that
+    # postdates the unwatch action and must be allowed to override the stale
+    # manual-unwatched marker rather than being silently reverted forever.
     if media1.status.manually_unwatched != media2.status.manually_unwatched:
-        other_is_media1 = not media1.status.manually_unwatched
-        other_media = media1 if other_is_media1 else media2
-        if not other_media.status.newly_completed:
+        unwatched_media = media1 if media1.status.manually_unwatched else media2
+        other_media = media2 if media1.status.manually_unwatched else media1
+        other_state_changed_at = to_aware_utc(other_media.status.state_changed_at)
+        unwatched_manual_unwatched_at = to_aware_utc(
+            unwatched_media.status.manual_unwatched_at
+        )
+        rewatch_overrides = bool(
+            other_media.status.completed
+            and other_state_changed_at is not None
+            and unwatched_manual_unwatched_at is not None
+            and other_state_changed_at > unwatched_manual_unwatched_at
+        )
+        if not rewatch_overrides:
             return (
                 Ord.A_BETTER
                 if media1.status.manually_unwatched
