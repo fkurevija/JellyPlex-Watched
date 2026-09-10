@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 import sys
@@ -1137,6 +1137,61 @@ def test_diverged_pending_sync_is_discarded_before_manual_unwatched_detection(
     assert unwatched_item.status.manually_unwatched
     with sqlite3.connect(initialize_watched_state_db(env)) as connection:
         assert connection.execute("SELECT COUNT(*) FROM pending_sync").fetchone() == (0,)
+
+
+def test_stale_pending_sync_does_not_suppress_new_manual_unwatch(tmp_path):
+    """A leftover pending_sync row from a much earlier sync attempt must not
+    permanently mask a brand-new, unrelated manual-unwatched transition just
+    because its expected completed/time values happen to coincide. Pending
+    entries are only meant to suppress detection for the one cycle
+    immediately following our own write; once they're stale (older than
+    WATCHED_STATE_PENDING_TTL_HOURS) they must be ignored."""
+    identifiers = MediaIdentifiers(
+        title="Stale Pending Item",
+        locations=("stale-pending-item.mkv",),
+        imdb_id="tt7654329",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[watched_item])})},
+        env,
+        "Plex",
+    )
+    record_pending_sync(env, unwatched_item, "Plex")
+
+    # Backdate the pending row well past the TTL, simulating a dangling
+    # entry left over from an old/unrelated sync attempt.
+    db_path = initialize_watched_state_db(env)
+    stale_created_at = (
+        datetime.now(timezone.utc) - timedelta(hours=48)
+    ).isoformat()
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE pending_sync SET created_at = ? WHERE destination_server = 'Plex'",
+            (stale_created_at,),
+        )
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[unwatched_item])})},
+        env,
+        "Plex",
+    )
+
+    assert unwatched_item.status.manually_unwatched
+    assert unwatched_item.status.manual_unwatched_at is not None
 
 
 def test_manual_unwatched_transition_remains_explicit_until_watched(tmp_path):

@@ -2,7 +2,7 @@ import copy
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import IntEnum
 from pydantic import BaseModel, Field
 from loguru import logger
@@ -286,13 +286,19 @@ def load_state_index(
             """,
             (f'%"source_server": "{source_server or ""}"%',),
         ).fetchall()
+        pending_ttl_hours = float(
+            get_env_value(env, "WATCHED_STATE_PENDING_TTL_HOURS", "24") or 24
+        )
+        pending_cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=pending_ttl_hours)
+        ).isoformat()
         pending_rows = connection.execute(
             """
             SELECT state_key, expected_completed, expected_resume_ms
             FROM pending_sync
-            WHERE destination_server = ?
+            WHERE destination_server = ? AND created_at >= ?
             """,
-            (source_server or "",),
+            (source_server or "", pending_cutoff),
         ).fetchall()
 
     index: dict[str, Any] = {
@@ -966,6 +972,12 @@ def check_remove_entry(
         and item1.status.time <= 60_000
         and (item2.status.completed or item2.status.time > 60_000)
     ):
+        logger.trace(
+            "check_remove_entry: treating item1 as unknown/never-played "
+            f"(no manual_unwatched_at) and removing it in favor of item2. "
+            f"item1='{item1.identifiers}' (completed={item1.status.completed}, time={item1.status.time}, manual_unwatched_at={item1.status.manual_unwatched_at}), "
+            f"item2='{item2.identifiers}' (completed={item2.status.completed}, time={item2.status.time})"
+        )
         return True
 
     # Plex CI dry-runs validate the complete Plex source mark list, including
