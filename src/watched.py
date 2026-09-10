@@ -562,12 +562,24 @@ def _apply_manual_unwatched_item_state_db(
     elif item.status.manually_unwatched:
         manual_unwatched_at = previous[4] if previous else now.isoformat()
 
+    # On the very first observation of this item (no previous DB row), we
+    # have no evidence of WHEN its current completed/time state actually
+    # arose - it could be old, pre-existing history, not a fresh change.
+    # Treating a first observation as "changed now" would let a
+    # long-completed item on one server spuriously "postdate" (and thus
+    # override) a manual-unwatched marker recorded moments earlier on the
+    # other server in the very same cycle. Record state_changed_at as
+    # unknown (None) instead so first observations can never trigger the
+    # rewatch-overrides-stale-unwatch logic below.
     state_changed_at = (
-        now.isoformat()
+        None
         if not previous
-        or bool(previous[1]) != item.status.completed
-        or abs(previous[2] - item.status.time) > 10_000
-        else previous[3]
+        else (
+            now.isoformat()
+            if bool(previous[1]) != item.status.completed
+            or abs(previous[2] - item.status.time) > 10_000
+            else previous[3]
+        )
     )
     item.status.state_changed_at = (
         datetime.fromisoformat(state_changed_at) if state_changed_at else None

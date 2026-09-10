@@ -1565,6 +1565,78 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
     )
 
 
+def test_first_observation_does_not_override_concurrent_manual_unwatch(tmp_path):
+    """
+    Regression test: state_changed_at used to be set to `now()` whenever an
+    item had no previous DB row at all (first-ever observation), not only on
+    a genuine completed/time transition. If the OTHER server's item happened
+    to be observed for the very first time in the same cycle a manual
+    unwatch was recorded (e.g. right after a fresh Docker volume/DB reset, or
+    the first cycle an item is ever seen), its brand-new "first observation"
+    timestamp could spuriously postdate manual_unwatched_at and incorrectly
+    override the manual-unwatched marker - even though the other item's
+    completed state could be arbitrarily old history, not a fresh rewatch.
+    """
+    identifiers = MediaIdentifiers(
+        title="Concurrent First Observation",
+        locations=("concurrent-first-observation.mkv",),
+        imdb_id="tt7654337",
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    # Plex: a fresh manual unwatch is detected (previous row already existed
+    # as watched).
+    plex_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_watched])})},
+        env,
+        "Plex",
+    )
+    plex_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_unwatched])})},
+        env,
+        "Plex",
+    )
+    assert plex_unwatched.status.manually_unwatched
+
+    # Jellyfin: this is the very FIRST time this item is ever observed on
+    # this server (no previous row) - it happens to already be completed,
+    # e.g. long-standing history, not a fresh rewatch.
+    jellyfin_first_seen_completed = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_first_seen_completed])})},
+        env,
+        "Jellyfin",
+    )
+
+    # The first-observation completed item must NOT override the manual
+    # unwatch just because it happened to be recorded in the same cycle.
+    assert (
+        compare_media_items(plex_unwatched, jellyfin_first_seen_completed, {})
+        == Ord.A_BETTER
+    )
+    assert (
+        compare_media_items(jellyfin_first_seen_completed, plex_unwatched, {})
+        == Ord.B_BETTER
+    )
+
+
 def test_manual_unwatched_detection_ignores_other_source_baseline(tmp_path):
     identifiers = MediaIdentifiers(
         title="Source Scoped Baseline",
