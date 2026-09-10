@@ -1139,6 +1139,71 @@ def test_diverged_pending_sync_is_discarded_before_manual_unwatched_detection(
         assert connection.execute("SELECT COUNT(*) FROM pending_sync").fetchone() == (0,)
 
 
+def test_manual_unwatch_detected_after_our_own_propagated_rewatch(tmp_path):
+    """
+    Regression test: this process's own writes to a destination server (via
+    record_pending_sync) never used to update that destination's own
+    media_state baseline - only a later READ of that server would. If, in a
+    single process run, we push a completed=True state to a destination
+    (e.g. Plex -> Jellyfin rewatch propagation) and the destination's real
+    state is changed again (a genuine manual unwatch) before the NEXT read
+    of that destination, the stale baseline (still showing whatever was
+    there BEFORE our write) makes the transition invisible: previous=False,
+    current=False, no change detected. That silently dropped a real manual
+    unwatch and let the completed state we just pushed get re-applied
+    forever.
+    """
+    identifiers = MediaIdentifiers(
+        title="Propagated Then Rewatched Elsewhere",
+        locations=("propagated-then-unwatched.mkv",),
+        imdb_id="tt7654338",
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    # Jellyfin has never had this item (its baseline is not-completed, e.g.
+    # it was never watched there before).
+    jellyfin_never_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_never_watched])})},
+        env,
+        "Jellyfin",
+    )
+
+    # Plex has a completed item, which this process propagates to Jellyfin
+    # (i.e. our own write, recorded via record_pending_sync).
+    plex_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    record_pending_sync(env, plex_watched, "Jellyfin")
+
+    # In the very same run (or before the next read of Jellyfin), the user
+    # manually unwatches it directly on Jellyfin.
+    jellyfin_freshly_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_freshly_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+
+    # The manual unwatch must be detected as a genuine transition (baseline
+    # completed=True from our own propagated write -> now False), not missed.
+    assert jellyfin_freshly_unwatched.status.manually_unwatched
+    assert jellyfin_freshly_unwatched.status.manual_unwatched_at is not None
+
+
 def test_stale_pending_sync_does_not_suppress_new_manual_unwatch(tmp_path):
     """A leftover pending_sync row from a much earlier sync attempt must not
     permanently mask a brand-new, unrelated manual-unwatched transition just
@@ -1171,6 +1236,23 @@ def test_stale_pending_sync_does_not_suppress_new_manual_unwatch(tmp_path):
         "Plex",
     )
     record_pending_sync(env, unwatched_item, "Plex")
+
+    # record_pending_sync also proactively baselines Plex's own media_state
+    # row to completed=False (the value it just wrote) - so simulate a full
+    # cycle passing where the item is genuinely rewatched again on Plex,
+    # re-establishing a completed=True baseline, before the real unwatch
+    # under test below.
+    rewatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[rewatched_item])})},
+        env,
+        "Plex",
+    )
 
     # Backdate the pending row well past the TTL, simulating a dangling
     # entry left over from an old/unrelated sync attempt.

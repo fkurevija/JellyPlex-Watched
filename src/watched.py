@@ -646,6 +646,25 @@ def record_pending_sync(
         int(item.status.completed),
         item.status.time,
     )
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    # The destination server's own media_state baseline is otherwise only
+    # ever updated by READING that server on a later cycle - never by this
+    # process's own writes. If the destination's real state is changed again
+    # (e.g. the user manually unwatches it) before that next read happens,
+    # the stale baseline (still showing the pre-write value) makes the
+    # subsequent read look unchanged, so the manual transition is silently
+    # missed. Proactively record what we just wrote as the destination's new
+    # baseline so a later divergent read is correctly recognized as a fresh
+    # manual change.
+    destination_state_key = mediaitem_state_key(
+        destination_item or item, destination_server
+    )
+    manual_unwatched_at = (
+        item.status.manual_unwatched_at.isoformat()
+        if item.status.manually_unwatched and item.status.manual_unwatched_at
+        else None
+    )
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             """
@@ -663,7 +682,31 @@ def record_pending_sync(
                 destination_server,
                 int(item.status.completed),
                 item.status.time,
-                datetime.now(timezone.utc).isoformat(),
+                now_iso,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO media_state
+            (state_key, completed, resume_ms, viewed_date, manual_unwatched_at,
+             observed_at, state_changed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(state_key) DO UPDATE SET
+                completed = excluded.completed,
+                resume_ms = excluded.resume_ms,
+                viewed_date = excluded.viewed_date,
+                manual_unwatched_at = excluded.manual_unwatched_at,
+                observed_at = excluded.observed_at,
+                state_changed_at = excluded.state_changed_at
+            """,
+            (
+                destination_state_key,
+                int(item.status.completed),
+                item.status.time,
+                item.status.viewed_date.isoformat(),
+                manual_unwatched_at,
+                now_iso,
+                now_iso,
             ),
         )
     state_indexes = env.get("_watched_state_indexes")
