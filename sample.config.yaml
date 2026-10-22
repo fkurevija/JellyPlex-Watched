@@ -59,6 +59,7 @@ plex:
     baseurl: http://plex.lan:32400
     sync_to: [jellyfin-main, emby-main] # pushes TO these (bidirectional below)
     token: "PLEX_TOKEN_HERE" # preferred auth path
+    # account_token: "PLEX_ACCOUNT_TOKEN_HERE" # only when token cannot access Plex account APIs
     ssl_bypass: false
 
   - name: plex-readonly # auth via username/password/servername triple

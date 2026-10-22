@@ -271,6 +271,7 @@ class PlexSettings(_ServerBase):
     """
 
     token: SecretStr | None = None
+    account_token: SecretStr | None = None
     username: str | None = None
     password: SecretStr | None = None
     servername: str | None = None

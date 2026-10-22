@@ -11,6 +11,7 @@ from conftest import settings_override
 from src import main
 from src.functions import formatter
 from src.jellyfin import Jellyfin
+from src.plex import Plex
 from src.settings import AppSettings
 from src.sync_inventory import fetch_watched_inventory, generate_sync_inventory
 from src.sync_plan import generate_watched_plan
@@ -394,6 +395,97 @@ def test_missing_destinations_are_unknown_but_empty_libraries_are_valid():
     assert generate_watched_plan({servers["a"]: history(movie())}, settings, 0) == {}
 
 
+def test_unwatched_catalog_baseline_contributes_target_identifiers_only():
+    settings = settings_override(
+        plex=[
+            dict(
+                name="plex-main",
+                baseurl="http://plex",
+                token="x",
+                sync_to=["jellyfin-main"],
+            )
+        ],
+        jellyfin=[
+            dict(
+                name="jellyfin-main",
+                baseurl="http://jellyfin",
+                token="x",
+                sync_to=["plex-main"],
+            )
+        ],
+    )
+    plex = object.__new__(Plex)
+    plex.server_settings = settings.plex[0]
+    jellyfin = object.__new__(Jellyfin)
+    jellyfin.server_settings = settings.jellyfin[0]
+    jellyfin_item = MediaItem(
+        identifiers=MediaIdentifiers(
+            title="shared",
+            tmdb_id="shared-id",
+            imdb_id="jellyfin-specific-id",
+        ),
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    watched = {
+        plex: history(
+            MediaItem(
+                identifiers=MediaIdentifiers(title="shared", tmdb_id="shared-id"),
+                status=WatchedStatus(
+                    completed=True,
+                    time=0,
+                    viewed_date=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                ),
+            )
+        ),
+        jellyfin: history(jellyfin_item),
+    }
+
+    plan = generate_watched_plan(watched, settings, 0)
+
+    updates = movies_for(plan, jellyfin)
+    assert len(updates) == 1
+    assert updates[0].status.completed
+    assert ("imdb", "jellyfin-specific-id") in (updates[0].identifiers.matching_aliases)
+
+
+def test_unwatched_catalog_source_does_not_generate_updates():
+    settings = settings_override(
+        plex=[
+            dict(
+                name="plex-main",
+                baseurl="http://plex",
+                token="x",
+                sync_to=["jellyfin-main"],
+            )
+        ],
+        jellyfin=[
+            dict(
+                name="jellyfin-main",
+                baseurl="http://jellyfin",
+                token="x",
+                sync_to=[],
+            )
+        ],
+    )
+    plex = object.__new__(Plex)
+    plex.server_settings = settings.plex[0]
+    jellyfin = object.__new__(Jellyfin)
+    jellyfin.server_settings = settings.jellyfin[0]
+    unknown = movie(completed=False, time=0)
+
+    plan = generate_watched_plan(
+        {plex: history(unknown), jellyfin: history()},
+        settings,
+        0,
+    )
+
+    assert plan == {}
+
+
 @pytest.mark.parametrize("dryrun", [False, True])
 @pytest.mark.parametrize("receipt", ["applied", "failed", "skipped"])
 def test_main_plans_chain_without_waiting_for_intermediate_receipts(
@@ -499,6 +591,45 @@ def test_main_trace_serializes_watched_history_and_relay_plan(monkeypatch):
     ]
     servers["b"].update_watched.assert_called_once()
     servers["c"].update_watched.assert_called_once()
+
+
+def test_main_logs_destinations_with_no_planned_updates(monkeypatch):
+    settings = make_settings({"a": ["b"], "b": ["a"]})
+    servers = make_servers(settings)
+    monkeypatch.setattr(
+        main, "generate_server_connections", Mock(return_value=list(servers.values()))
+    )
+    monkeypatch.setattr(main, "generate_all_server_users", Mock(return_value={}))
+    monkeypatch.setattr(main, "generate_sync_inventory", Mock(return_value={}))
+    monkeypatch.setattr(
+        main,
+        "fetch_watched_inventory",
+        Mock(return_value={server: {} for server in servers.values()}),
+    )
+
+    messages = []
+    sink = logger.add(
+        messages.append,
+        level="INFO",
+        format=formatter,
+        filter=lambda record: record["name"] == "src.main",
+        catch=False,
+    )
+    try:
+        main.main_loop(settings, 0)
+    finally:
+        logger.remove(sink)
+
+    assert {
+        message.record["message"]
+        for message in messages
+        if message.record["message"].startswith("No watched updates planned")
+    } == {
+        "No watched updates planned for [a]",
+        "No watched updates planned for [b]",
+    }
+    for server in servers.values():
+        server.update_watched.assert_not_called()
 
 
 def test_two_server_plan_matches_existing_cleanup():
@@ -746,8 +877,8 @@ def apply_jellyfin_plan(monkeypatch, target, plan, item, show=None):
 
     def query(path, method, **kwargs):
         if method == "post":
-            writes.append((path, kwargs["json"]))
-            return {}
+            writes.append((path, kwargs))
+            return None
         if path.endswith("/Views"):
             return {
                 "Items": [
@@ -801,7 +932,8 @@ def test_identifier_bridges_produce_one_completed_write(monkeypatch, kind, order
     show = {"Id": "show-id", "Name": "show", "ProviderIds": item["ProviderIds"]}
     writes, outcomes = apply_jellyfin_plan(monkeypatch, target, plan, item, show)
     assert len(writes) == 1
-    assert writes[0][1]["Played"] is True
+    assert writes[0][0].startswith("/Users/user-id/PlayedItems/item-id?datePlayed=")
+    assert writes[0][1] == {}
     assert [(outcome.status, outcome.target_item_id) for outcome in outcomes] == [
         ("applied", "item-id")
     ]
@@ -849,7 +981,8 @@ def test_tied_source_keeps_alternate_identifiers_for_adapter(
         {"Id": "show-id", "Name": "show", **show_data},
     )
     assert len(writes) == 1
-    assert writes[0][1]["Played"] is True
+    assert writes[0][0].startswith("/Users/user-id/PlayedItems/item-id?datePlayed=")
+    assert writes[0][1] == {}
     assert outcomes[0].status == "applied"
 
 

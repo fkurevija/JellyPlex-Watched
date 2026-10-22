@@ -2,6 +2,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from conftest import settings_override
 
@@ -24,6 +25,7 @@ from src.watched import (  # noqa: E402
     LibraryData,
     MediaIdentifiers,
     MediaItem,
+    Series,
     UserData,
     WatchedStatus,
     WatchedWriteOutcome,
@@ -414,6 +416,7 @@ def test_jellyfin_receipt_contains_only_confirmed_item_writes(tmp_path):
     )
     adapter = object.__new__(JellyfinEmby)
     adapter.app_settings = settings
+    adapter.server_settings = SimpleNamespace(name="jellyfin-ci")
     adapter.server_type = "Jellyfin"
     adapter.server_name = "Jellyfin CI"
     adapter.update_partial = False
@@ -465,14 +468,16 @@ def test_jellyfin_receipt_contains_only_confirmed_item_writes(tmp_path):
         },
     ]
     posted_ids: list[str] = []
+    posted_paths: list[str] = []
 
     def query(path: str, query_type: str, **_kwargs):
         if query_type == "get":
             return {"Items": destination_items}
-        item_id = path.split("/Items/", 1)[1].split("/", 1)[0]
+        item_id = path.split("/PlayedItems/", 1)[1].split("?", 1)[0]
         if item_id == "failed-id":
             raise RuntimeError("simulated write failure")
         posted_ids.append(item_id)
+        posted_paths.append(path)
         return None
 
     adapter.query = query
@@ -496,6 +501,11 @@ def test_jellyfin_receipt_contains_only_confirmed_item_writes(tmp_path):
         ("skipped", None),
     ]
     assert posted_ids == ["applied-id", "after-failure-id"]
+    assert all(
+        path.startswith("/Users/alice-id/PlayedItems/")
+        and "datePlayed=2026-01-01T00%3A00%3A00.000Z" in path
+        for path in posted_paths
+    )
     applied = [outcome for outcome in outcomes if outcome.status == "applied"]
     assert [outcome.media_item.identifiers.title for outcome in applied] == [
         "Applied",
@@ -503,6 +513,91 @@ def test_jellyfin_receipt_contains_only_confirmed_item_writes(tmp_path):
     ]
     assert all(outcome.media_item.status.completed for outcome in applied)
     assert all(outcome.media_item.status.time == 0 for outcome in applied)
+
+
+def test_jellyfin_marks_watched_episodes_via_played_items(tmp_path, monkeypatch):
+    settings = settings_override(
+        dryrun=False,
+        generate_locations=True,
+        mark_file=tmp_path / "mark.log",
+    )
+    adapter = object.__new__(JellyfinEmby)
+    adapter.app_settings = settings
+    adapter.server_settings = SimpleNamespace(name="jellyfin-ci")
+    adapter.server_type = "Jellyfin"
+    adapter.server_name = "Jellyfin CI"
+    adapter.update_partial = False
+
+    episode = MediaItem(
+        identifiers=MediaIdentifiers(
+            title="Slumber Party Panic",
+            locations=("Slumber Party Panic.mkv",),
+        ),
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    series = Series(
+        identifiers=MediaIdentifiers(
+            title="Adventure Time",
+            locations=("Adventure Time",),
+        ),
+        episodes=[episode],
+    )
+    writes: list[tuple[str, dict]] = []
+
+    def query(path: str, query_type: str, **kwargs):
+        if query_type == "post":
+            writes.append((path, kwargs))
+            return None
+        if path.startswith("/Users/"):
+            return {
+                "Items": [
+                    {
+                        "Id": "show-id",
+                        "Name": "Adventure Time",
+                        "Path": "/media/Adventure Time",
+                    }
+                ]
+            }
+        return {
+            "Items": [
+                {
+                    "Id": "episode-id",
+                    "Name": "Slumber Party Panic",
+                    "Path": "/media/Slumber Party Panic.mkv",
+                    "SeriesName": "Adventure Time",
+                    "SeasonName": "Season 1",
+                    "IndexNumber": 1,
+                    "UserData": {"Played": False},
+                }
+            ]
+        }
+
+    adapter.query = query
+    monkeypatch.setattr(
+        "src.jellyfin_emby.record_pending_sync", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr("src.jellyfin_emby.log_marked", lambda *_args, **_kwargs: None)
+
+    outcomes = adapter.update_user_watched(
+        "alice",
+        "alice-id",
+        LibraryData(title="Shows", series=[series]),
+        "Shows",
+        "shows-id",
+        False,
+    )
+
+    assert writes == [
+        (
+            "/Users/alice-id/PlayedItems/episode-id?datePlayed=2026-01-01T00%3A00%3A00.000Z",
+            {},
+        )
+    ]
+    assert [outcome.status for outcome in outcomes] == ["applied"]
 
 
 def test_destination_receipts_do_not_remap_crossed_identities():
@@ -654,6 +749,7 @@ def test_jellyfin_watched_includes_played_series_with_zero_aggregate_count():
     """A played custom series is read even when Jellyfin reports a 0/0 aggregate."""
     adapter = object.__new__(JellyfinEmby)
     adapter.app_settings = settings_override()
+    adapter.server_settings = SimpleNamespace(name="jellyfin-ci")
     adapter.server_type = "Jellyfin"
 
     show = {
@@ -669,7 +765,6 @@ def test_jellyfin_watched_includes_played_series_with_zero_aggregate_count():
     responses = iter(
         [
             {"Items": [show]},
-            {"Items": []},
             {
                 "Items": [
                     {
@@ -681,7 +776,13 @@ def test_jellyfin_watched_includes_played_series_with_zero_aggregate_count():
             },
         ]
     )
-    adapter.query = lambda _path, _method: next(responses)
+    query_paths = []
+
+    def query(path, method):
+        query_paths.append(path)
+        return next(responses)
+
+    adapter.query = query
 
     watched = adapter.get_user_library_watched(
         "JellyUser",
@@ -694,6 +795,206 @@ def test_jellyfin_watched_includes_played_series_with_zero_aggregate_count():
     assert [episode.identifiers.title for episode in watched.series[0].episodes] == [
         "S01E02"
     ]
+    assert "Fields=ProviderIds,Path,UserData,UserDataLastPlayedDate" in query_paths[1]
+
+
+def test_jellyfin_movie_fetch_requests_full_user_data():
+    adapter = object.__new__(JellyfinEmby)
+    adapter.app_settings = settings_override()
+    adapter.server_settings = SimpleNamespace(name="jellyfin-ci")
+    adapter.server_type = "Jellyfin"
+    query_paths = []
+
+    def query(path, _method):
+        query_paths.append(path)
+        return {
+            "Items": [
+                {
+                    "Id": "movie-id",
+                    "Name": "Watched Movie",
+                    "Path": "/movies/watched.mkv",
+                    "UserData": {"Played": True, "PlaybackPositionTicks": 0},
+                }
+            ]
+        }
+
+    adapter.query = query
+
+    watched = adapter.get_user_library_watched(
+        "JellyUser",
+        "user-id",
+        "movies",
+        "library-id",
+        "Movies",
+    )
+
+    assert "Fields=ItemCounts,ProviderIds,Path,UserData,UserDataLastPlayedDate" in (
+        query_paths[0]
+    )
+    assert watched.movies[0].status.completed
+
+
+def test_jellyfin_catalog_fetch_searches_only_catalog_movies():
+    adapter = object.__new__(JellyfinEmby)
+    adapter.app_settings = settings_override(generate_guids=True)
+    adapter.server_type = "Jellyfin"
+    adapter.server_settings = SimpleNamespace(name="jellyfin-target")
+    adapter.query = Mock(
+        return_value={
+            "Items": [
+                {
+                    "Id": "wanted-id",
+                    "Name": "Wanted Movie",
+                    "Path": "/movies/wanted.mkv",
+                    "ProviderIds": {"Tmdb": "123"},
+                    "UserData": {"Played": True},
+                }
+            ]
+        }
+    )
+    catalog = LibraryData(
+        title="Movies",
+        movies=[
+            MediaItem(
+                identifiers=MediaIdentifiers(title="Wanted Movie", tmdb_id="123"),
+                status=WatchedStatus(
+                    completed=False,
+                    time=0,
+                    viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                ),
+            )
+        ],
+    )
+
+    result = adapter.get_user_library_watched_for_catalog(
+        "alice", "alice-id", "movies", "movies-id", "Movies", catalog
+    )
+
+    assert [item.identifiers.title for item in result.movies] == ["Wanted Movie"]
+    assert adapter.query.call_count == 1
+    assert "SearchTerm=Wanted+Movie" in adapter.query.call_args.args[0]
+
+
+def test_jellyfin_catalog_keeps_unwatched_movie_as_identity_baseline():
+    adapter = object.__new__(JellyfinEmby)
+    adapter.app_settings = settings_override(generate_guids=True)
+    adapter.server_type = "Jellyfin"
+    adapter.server_settings = SimpleNamespace(name="jellyfin-target")
+    adapter.query = Mock(
+        return_value={
+            "Items": [
+                {
+                    "Id": "target-id",
+                    "Name": "Wanted Movie",
+                    "Path": "/movies/wanted.mkv",
+                    "ProviderIds": {"Tmdb": "123", "Imdb": "jf-id"},
+                    "UserData": {"Played": False, "PlaybackPositionTicks": 0},
+                }
+            ]
+        }
+    )
+    catalog = LibraryData(
+        title="Movies",
+        movies=[
+            MediaItem(
+                identifiers=MediaIdentifiers(title="Wanted Movie", tmdb_id="123"),
+                status=WatchedStatus(
+                    completed=False,
+                    time=0,
+                    viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                ),
+            )
+        ],
+    )
+
+    result = adapter.get_user_library_watched_for_catalog(
+        "alice", "alice-id", "movies", "movies-id", "Movies", catalog
+    )
+
+    assert len(result.movies) == 1
+    assert not result.movies[0].status.completed
+    assert result.movies[0].identifiers.imdb_id == "jf-id"
+
+
+def test_jellyfin_catalog_fetch_limits_episodes_to_catalog_show():
+    adapter = object.__new__(JellyfinEmby)
+    adapter.app_settings = settings_override(generate_guids=True)
+    adapter.server_type = "Jellyfin"
+    adapter.server_settings = SimpleNamespace(name="jellyfin-target")
+
+    def query(path, _method):
+        if "/Episodes" in path:
+            return {
+                "Items": [
+                    {
+                        "Id": "wanted-episode",
+                        "Name": "S01E01",
+                        "Path": "/shows/example/S01E01.mkv",
+                        "ProviderIds": {"Tmdb": "episode-1"},
+                        "UserData": {"Played": True},
+                    },
+                    {
+                        "Id": "untracked-episode",
+                        "Name": "S01E02",
+                        "Path": "/shows/example/S01E02.mkv",
+                        "ProviderIds": {"Tmdb": "episode-2"},
+                        "UserData": {"Played": False},
+                    },
+                ]
+            }
+        return {
+            "Items": [
+                {
+                    "Id": "show-id",
+                    "Name": "Example Show",
+                    "Path": "/shows/example",
+                    "ProviderIds": {"Tvdb": "show-1"},
+                }
+            ]
+        }
+
+    adapter.query = Mock(side_effect=query)
+    catalog = LibraryData(
+        title="Shows",
+        series=[
+            Series(
+                identifiers=MediaIdentifiers(title="Example Show", tvdb_id="show-1"),
+                episodes=[
+                    MediaItem(
+                        identifiers=MediaIdentifiers(
+                            title="S01E01", tmdb_id="episode-1"
+                        ),
+                        status=WatchedStatus(
+                            completed=False,
+                            time=0,
+                            viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                        ),
+                    ),
+                    MediaItem(
+                        identifiers=MediaIdentifiers(
+                            title="S01E02", tmdb_id="episode-2"
+                        ),
+                        status=WatchedStatus(
+                            completed=False,
+                            time=0,
+                            viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                        ),
+                    ),
+                ],
+            )
+        ],
+    )
+
+    result = adapter.get_user_library_watched_for_catalog(
+        "alice", "alice-id", "tvshows", "shows-id", "Shows", catalog
+    )
+
+    assert [episode.identifiers.title for episode in result.series[0].episodes] == [
+        "S01E01",
+        "S01E02",
+    ]
+    assert not result.series[0].episodes[1].status.completed
+    assert adapter.query.call_count == 2
 
 
 def test_combine_user_lists_keeps_same_name_identities_separate():

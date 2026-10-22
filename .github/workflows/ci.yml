@@ -80,7 +80,7 @@ jobs:
         run: JellyPlex-Watched-CI/start_containers.sh
 
       - name: "Wait for containers"
-        run: sleep 15
+        run: uv run python test/wait_for_ci_servers.py
 
       - name: "Show container logs"
         run: uv run test/show_ci_container_logs.py JellyPlex-Watched-CI
@@ -233,7 +233,7 @@ jobs:
         run: JellyPlex-Watched-CI/start_containers.sh
 
       - name: "Wait for containers"
-        run: sleep 15
+        run: uv run python test/wait_for_ci_servers.py
 
       - name: "Show container logs"
         run: uv run test/show_ci_container_logs.py JellyPlex-Watched-CI
@@ -290,7 +290,7 @@ jobs:
         run: JellyPlex-Watched-CI/start_containers.sh
 
       - name: "Wait for YAML write test containers"
-        run: sleep 15
+        run: uv run python test/wait_for_ci_servers.py
 
       - name: "Test writing to servers YAML"
         env:

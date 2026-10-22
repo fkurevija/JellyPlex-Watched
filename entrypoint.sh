@@ -56,6 +56,8 @@ while IFS= read -r RUNTIME_FILE; do
         if [ "$(id -u)" = '0' ]; then
             chown "$PUID:$PGID" "$RUNTIME_DIR"
         fi
+    elif [ "$(id -u)" = '0' ]; then
+        chown "$PUID:$PGID" "$RUNTIME_DIR"
     fi
 
     if [ ! -e "$RUNTIME_FILE" ]; then

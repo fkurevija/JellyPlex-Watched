@@ -82,8 +82,44 @@ def _with_matching_aliases(
     )
 
 
-def _select_candidates(
-    candidates: list[_Candidate],
+def _is_unknown_state(item) -> bool:
+    status = item.status
+    return (
+        not status.completed
+        and status.manual_unwatched_at is None
+        and status.time == 0
+    )
+
+
+def _is_meaningful_state(item) -> bool:
+    return item.status.completed or item.status.time > 0
+
+
+def _loses_to_baseline(candidate, baseline_item, settings, average_time) -> bool:
+    # Never-played items carry a synthetic current timestamp and must not
+    # override (or be overridden by) real watched/partial state.
+    if _is_unknown_state(candidate) and _is_meaningful_state(baseline_item):
+        return True
+    if _is_unknown_state(baseline_item) and _is_meaningful_state(candidate):
+        return False
+    return (
+        compare_media_items(candidate, baseline_item, settings, average_time)
+        != Ord.A_BETTER
+    )
+
+
+def _beats_winner(winner, candidate, settings, average_time) -> bool:
+    if _is_unknown_state(winner) and _is_meaningful_state(candidate):
+        return True
+    if _is_unknown_state(candidate) and _is_meaningful_state(winner):
+        return False
+    return (
+        compare_media_items(winner, candidate, settings, average_time)
+        == Ord.B_BETTER
+    )
+
+
+def _select_candidates(    candidates: list[_Candidate],
     settings: AppSettings,
     average_time: float,
 ) -> list[_Candidate]:
@@ -96,21 +132,18 @@ def _select_candidates(
         for candidate in group:
             if candidate.source is None:
                 continue
+            if _is_unknown_state(candidate.item):
+                continue
             # Keep baseline filtering before state reduction: timestamp and
             # timeline tolerances do not form a transitive ordering. Suppressed
             # candidates still contribute identity evidence to the group.
             if any(
-                compare_media_items(candidate.item, item, settings, average_time)
-                != Ord.A_BETTER
+                _loses_to_baseline(candidate.item, item, settings, average_time)
                 for item in baseline
             ):
                 continue
-            if (
-                winner is None
-                or compare_media_items(
-                    winner.item, candidate.item, settings, average_time
-                )
-                == Ord.B_BETTER
+            if winner is None or _beats_winner(
+                winner.item, candidate.item, settings, average_time
             ):
                 winner = candidate
         if winner is not None:

@@ -17,6 +17,7 @@ from src.functions import (
     log_marked,
     normalize_name,
 )
+from src.progress import ProgressLogger
 from src.settings import AppSettings, PlexSettings
 from src.watched import (
     LibraryData,
@@ -31,6 +32,9 @@ from src.watched import (
     WatchedWriteOutcome,
     WriteOutcomeStatus,
     resulting_media_item,
+    record_pending_sync,
+    was_previously_watched,
+    STATE_ENV,
 )
 
 
@@ -78,8 +82,13 @@ def extract_identifiers_from_item(
 
     if generate_guids:
         if not guids:
+            location_text = (
+                f", locations: {' '.join(item.locations)}"
+                if generate_locations
+                else ""
+            )
             logger.debug(
-                f"Plex: {item.title} has no guids{f', locations: {" ".join(item.locations)}' if generate_locations else ''}",
+                f"Plex: {item.title} has no guids{location_text}",
             )
 
     if generate_locations:
@@ -129,6 +138,10 @@ def get_mediaitem(
 
 # class plex accept base url and token and username and password but default with none
 class Plex:
+    @property
+    def env(self) -> dict:
+        return STATE_ENV
+
     def __init__(
         self,
         app_settings: AppSettings,
@@ -170,7 +183,12 @@ class Plex:
 
         self.base_url: str = self.plex._baseurl
 
-        self.admin_user: MyPlexAccount = self.plex.myPlexAccount()
+        if server_settings.account_token:
+            self.admin_user: MyPlexAccount = MyPlexAccount(
+                token=server_settings.account_token.get_secret_value()
+            )
+        else:
+            self.admin_user = self.plex.myPlexAccount()
         self.users: list[MyPlexUser | MyPlexAccount] = self.get_users()
 
     def login(
@@ -205,10 +223,10 @@ class Plex:
 
     def get_users(self) -> list[MyPlexUser | MyPlexAccount]:
         try:
-            users: list[MyPlexUser | MyPlexAccount] = self.plex.myPlexAccount().users()
+            users: list[MyPlexUser | MyPlexAccount] = self.admin_user.users()
 
             # append self to users
-            users.append(self.plex.myPlexAccount())
+            users.append(self.admin_user)
 
             return users
         except Exception as e:
@@ -260,57 +278,106 @@ class Plex:
             if library.type in {"movie", "show"}
         }
 
+    def get_user_library_sizes(
+        self, user: MyPlexUser | MyPlexAccount
+    ) -> dict[str, int]:
+        if user == self.admin_user:
+            user_plex = self.plex
+        elif isinstance(user, MyPlexUser):
+            token = user.get_token(self.plex.machineIdentifier)
+            if not token:
+                return {}
+            user_plex = self.login(self.base_url, token, None, None, None)
+        else:
+            return {}
+
+        sizes = {}
+        for library in user_plex.library.sections():
+            size = library.totalViewSize(includeCollections=False)
+            if isinstance(size, int) and size >= 0:
+                sizes[library.title] = size
+        return sizes
+
     def get_user_library_watched(
         self, user_name: str, user_plex: PlexServer, library: MovieSection | ShowSection
     ) -> LibraryData | None:
         try:
             logger.info(
-                f"Plex: Generating watched for {user_name} in library {library.title}",
+                "Plex [{}]: Generating watched for {} in library {}",
+                self.server_settings.name,
+                user_name,
+                library.title,
             )
             watched = LibraryData(title=library.title)
 
             library_videos = user_plex.library.section(library.title)
 
             if library.type == "movie":
-                for video in library_videos.search(
-                    unwatched=False
-                ) + library_videos.search(inProgress=True):
-                    if video.isWatched or video.viewOffset >= 60000:
-                        watched.movies.append(
-                            get_mediaitem(
-                                video,
-                                video.isWatched,
-                                self.app_settings.generate_guids,
-                                self.app_settings.generate_locations,
-                            )
-                        )
+                videos = library_videos.search()
+                progress = ProgressLogger(
+                    self.server_settings.name,
+                    f"Building watched list for {library.title} movies",
+                    len(videos),
+                )
+                progress.update(0)
+                for index, video in enumerate(videos, start=1):
+                    video_item = get_mediaitem(
+                        video,
+                        video.isWatched,
+                        self.app_settings.generate_guids,
+                        self.app_settings.generate_locations,
+                    )
+                    logger.trace(
+                        f"Plex: {video.title} isWatched={video.isWatched} "
+                        f"viewOffset={video.viewOffset}"
+                    )
+                    if (
+                        video.isWatched
+                        or video.viewOffset >= 60000
+                        or was_previously_watched(video_item, self.env)
+                    ):
+                        watched.movies.append(video_item)
+                    progress.update(index)
 
             elif library.type == "show":
                 # Keep track of processed shows to reduce duplicate shows
-                processed_shows = []
-                for show in library_videos.search(
-                    unwatched=False
-                ) + library_videos.search(inProgress=True):
-                    if show.key in processed_shows:
+                shows = []
+                processed_show_keys = set()
+                for show in library_videos.search():
+                    if show.key in processed_show_keys:
                         continue
-                    processed_shows.append(show.key)
+                    processed_show_keys.add(show.key)
+                    shows.append(show)
+                progress = ProgressLogger(
+                    self.server_settings.name,
+                    f"Building watched list for {library.title} shows",
+                    len(shows),
+                )
+                progress.update(0)
+                for index, show in enumerate(shows, start=1):
                     show_guids = extract_guids_from_item(
                         show, self.app_settings.generate_guids
                     )
                     episode_mediaitem = []
 
                     # Fetch watched or partially watched episodes
-                    for episode in show.watched() + show.episodes(
-                        viewOffset__gte=60_000
-                    ):
-                        episode_mediaitem.append(
-                            get_mediaitem(
-                                episode,
-                                episode.isWatched,
-                                self.app_settings.generate_guids,
-                                self.app_settings.generate_locations,
-                            )
+                    for episode in show.episodes():
+                        episode_item = get_mediaitem(
+                            episode,
+                            episode.isWatched,
+                            self.app_settings.generate_guids,
+                            self.app_settings.generate_locations,
                         )
+                        logger.trace(
+                            f"Plex: {show.title} {episode.title} "
+                            f"isWatched={episode.isWatched} viewOffset={episode.viewOffset}"
+                        )
+                        if (
+                            episode.isWatched
+                            or episode.viewOffset >= 60_000
+                            or was_previously_watched(episode_item, self.env)
+                        ):
+                            episode_mediaitem.append(episode_item)
 
                     if episode_mediaitem:
                         watched.series.append(
@@ -334,12 +401,297 @@ class Plex:
                                 episodes=episode_mediaitem,
                             )
                         )
+                    progress.update(index)
 
             return watched
 
         except Exception as e:
             logger.error(
-                f"Plex: Failed to get watched for {user_name} in library {library.title}, Error: {e}",
+                "Plex [{}]: Failed to get watched for {} in library {}: {}",
+                self.server_settings.name,
+                user_name,
+                library.title,
+                e,
+            )
+            return None
+
+    def get_user_library_catalog(
+        self,
+        user_name: str,
+        user: MyPlexUser | MyPlexAccount,
+        library_name: str,
+    ) -> LibraryData | None:
+        try:
+            if user == self.admin_user:
+                user_plex = self.plex
+            elif isinstance(user, MyPlexUser):
+                token = user.get_token(self.plex.machineIdentifier)
+                if not token:
+                    return None
+                user_plex = self.login(self.base_url, token, None, None, None)
+            else:
+                return None
+
+            library = user_plex.library.section(library_name)
+            catalog = LibraryData(title=library_name)
+            if library.type == "movie":
+                movies = library.search()
+                progress = ProgressLogger(
+                    self.server_settings.name,
+                    f"Building media catalog for {library_name} movies",
+                    len(movies),
+                )
+                progress.update(0)
+                for index, movie in enumerate(movies, start=1):
+                    catalog.movies.append(
+                        get_mediaitem(
+                            movie,
+                            movie.isWatched,
+                            self.app_settings.generate_guids,
+                            self.app_settings.generate_locations,
+                        )
+                    )
+                    progress.update(index)
+            elif library.type == "show":
+                shows = library.search()
+                progress = ProgressLogger(
+                    self.server_settings.name,
+                    f"Building media catalog for {library_name} shows",
+                    len(shows),
+                )
+                progress.update(0)
+                for index, show in enumerate(shows, start=1):
+                    episodes = [
+                        get_mediaitem(
+                            episode,
+                            episode.isWatched,
+                            self.app_settings.generate_guids,
+                            self.app_settings.generate_locations,
+                        )
+                        for episode in show.episodes()
+                    ]
+                    catalog.series.append(
+                        Series(
+                            identifiers=extract_identifiers_from_item(
+                                show,
+                                self.app_settings.generate_guids,
+                                self.app_settings.generate_locations,
+                            ),
+                            episodes=episodes,
+                        )
+                    )
+                    progress.update(index)
+            else:
+                return None
+            logger.info(
+                "Plex [{}]: Built catalog of {} items from {} for {}",
+                self.server_settings.name,
+                len(catalog.movies)
+                if library.type == "movie"
+                else sum(len(show.episodes) for show in catalog.series),
+                library_name,
+                user_name,
+            )
+            return catalog
+        except Exception as error:
+            logger.error(
+                "Plex [{}]: Failed to build catalog for {} in library {} ({})",
+                self.server_settings.name,
+                user_name,
+                library_name,
+                type(error).__name__,
+            )
+            return None
+
+    def get_user_library_watched_for_catalog(
+        self,
+        user_name: str,
+        user_plex: PlexServer,
+        library: MovieSection | ShowSection,
+        catalog: LibraryData,
+    ) -> LibraryData | None:
+        """Read only media matching a catalog, avoiding a full library walk."""
+        try:
+            logger.info(
+                "Plex [{}]: Generating catalog-scoped watched state for {} "
+                "in library {}",
+                self.server_settings.name,
+                user_name,
+                library.title,
+            )
+            section = user_plex.library.section(library.title)
+            watched = LibraryData(title=library.title)
+
+            def search_matches(identifiers: MediaIdentifiers, media_type: str):
+                candidates = []
+                for provider, value in (
+                    ("imdb", identifiers.imdb_id),
+                    ("tmdb", identifiers.tmdb_id),
+                    ("tvdb", identifiers.tvdb_id),
+                ):
+                    if not value:
+                        continue
+                    candidates.extend(
+                        section.search(
+                            guid=f"{provider}://{value}", libtype=media_type
+                        )
+                    )
+                if identifiers.title:
+                    candidates.extend(
+                        section.search(title=identifiers.title, libtype=media_type)
+                    )
+
+                matched = []
+                seen = set()
+                for candidate in candidates:
+                    key = getattr(candidate, "ratingKey", None) or candidate.key
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if check_same_identifiers(
+                        identifiers,
+                        extract_identifiers_from_item(
+                            candidate,
+                            self.app_settings.generate_guids,
+                            self.app_settings.generate_locations,
+                        ),
+                    ):
+                        matched.append(candidate)
+                return matched
+
+            if library.type == "movie":
+                progress = ProgressLogger(
+                    self.server_settings.name,
+                    f"Matching catalog movies in {library.title}",
+                    len(catalog.movies),
+                )
+                progress.update(0)
+                for index, expected in enumerate(catalog.movies, start=1):
+                    for movie in search_matches(expected.identifiers, "movie"):
+                        item = get_mediaitem(
+                            movie,
+                            movie.isWatched,
+                            self.app_settings.generate_guids,
+                            self.app_settings.generate_locations,
+                        )
+                        if not (
+                            item.status.completed
+                            or item.status.time >= 60_000
+                            or was_previously_watched(item, self.env)
+                        ):
+                            item = item.model_copy(
+                                update={
+                                    "status": item.status.model_copy(
+                                        update={"completed": False, "time": 0}
+                                    )
+                                }
+                            )
+                        watched.movies.append(item)
+                    progress.update(index)
+
+            elif library.type == "show":
+                progress = ProgressLogger(
+                    self.server_settings.name,
+                    f"Matching catalog shows in {library.title}",
+                    len(catalog.series),
+                )
+                progress.update(0)
+                for index, expected_show in enumerate(catalog.series, start=1):
+                    logger.debug(
+                        "Plex [{}]: Matching catalog show {}/{}: {}",
+                        self.server_settings.name,
+                        index,
+                        len(catalog.series),
+                        expected_show.identifiers.title,
+                    )
+                    matched_shows = search_matches(
+                        expected_show.identifiers, "show"
+                    )
+                    expected_episodes = expected_show.episodes
+                    matched_episode_count = 0
+                    watched_episode_count = 0
+                    for show in matched_shows:
+                        show_guids = extract_guids_from_item(
+                            show, self.app_settings.generate_guids
+                        )
+                        episode_mediaitems = []
+                        for episode in show.episodes():
+                            episode_identifiers = extract_identifiers_from_item(
+                                episode,
+                                self.app_settings.generate_guids,
+                                self.app_settings.generate_locations,
+                            )
+                            if not any(
+                                check_same_identifiers(
+                                    expected.identifiers, episode_identifiers
+                                )
+                                for expected in expected_episodes
+                            ):
+                                continue
+                            matched_episode_count += 1
+                            item = get_mediaitem(
+                                episode,
+                                episode.isWatched,
+                                self.app_settings.generate_guids,
+                                self.app_settings.generate_locations,
+                            )
+                            if item.status.completed or item.status.time >= 60_000:
+                                watched_episode_count += 1
+                            if not (
+                                item.status.completed
+                                or item.status.time >= 60_000
+                                or was_previously_watched(item, self.env)
+                            ):
+                                item = item.model_copy(
+                                    update={
+                                        "status": item.status.model_copy(
+                                            update={"completed": False, "time": 0}
+                                        )
+                                    }
+                                )
+                            episode_mediaitems.append(item)
+
+                        if episode_mediaitems:
+                            watched.series.append(
+                                Series(
+                                    identifiers=MediaIdentifiers(
+                                        title=show.title,
+                                        locations=(
+                                            tuple(
+                                                filename_from_any_path(location)
+                                                for location in show.locations
+                                            )
+                                            if self.app_settings.generate_locations
+                                            else tuple()
+                                        ),
+                                        imdb_id=show_guids.get("imdb"),
+                                        tvdb_id=show_guids.get("tvdb"),
+                                        tmdb_id=show_guids.get("tmdb"),
+                                    ),
+                                    episodes=episode_mediaitems,
+                                )
+                            )
+                    logger.debug(
+                        "Plex [{}]: Catalog show {} matched {} Plex shows and "
+                        "{}/{} episodes ({} watched or partially watched)",
+                        self.server_settings.name,
+                        expected_show.identifiers.title,
+                        len(matched_shows),
+                        matched_episode_count,
+                        len(expected_episodes),
+                        watched_episode_count,
+                    )
+                    progress.update(index)
+
+            return watched
+        except Exception as error:
+            logger.error(
+                "Plex [{}]: Failed catalog-scoped watched fetch for {} in "
+                "library {} ({})",
+                self.server_settings.name,
+                user_name,
+                library.title,
+                type(error).__name__,
             )
             return None
 
@@ -348,6 +700,8 @@ class Plex:
         users: list[MyPlexUser | MyPlexAccount],
         sync_libraries: list[str],
         users_watched: dict[str, UserData] | None = None,
+        *,
+        catalogs: dict[str, LibraryData] | None = None,
     ) -> dict[str, UserData]:
         try:
             if not users_watched:
@@ -384,9 +738,22 @@ class Plex:
                         )
                         continue
 
-                    library_data = self.get_user_library_watched(
-                        user_name, user_plex, library
+                    catalog = next(
+                        (
+                            data
+                            for name, data in (catalogs or {}).items()
+                            if normalize_name(name) == normalize_name(library.title)
+                        ),
+                        None,
                     )
+                    if catalog is None:
+                        library_data = self.get_user_library_watched(
+                            user_name, user_plex, library
+                        )
+                    else:
+                        library_data = self.get_user_library_watched_for_catalog(
+                            user_name, user_plex, library, catalog
+                        )
 
                     if library_data is None:
                         continue
@@ -450,7 +817,10 @@ class Plex:
             return outcomes
 
         logger.info(
-            f"Plex: Updating watched for {user.title} in library {library_name}"
+            "Plex [{}]: Updating watched for {} in library {}",
+            self.server_settings.name,
+            user.title,
+            library_name,
         )
         library_section = plex_server.library.section(library_name)
         if not library_section:
@@ -499,10 +869,28 @@ class Plex:
                         # If the stored movie is marked as watched (or has enough progress),
                         # update the Plex movie accordingly.
                         if stored_movie.status.completed:
-                            msg = f"Plex: {plex_movie.title} as watched for {user.title} in {library_name}"
+                            if plex_movie.isWatched and plex_movie.viewOffset < 60_000:
+                                add_outcome(
+                                    "skipped",
+                                    stored_movie,
+                                    target_identifiers=plex_identifiers,
+                                    target_item_id=target_item_id,
+                                    reason="already watched",
+                                )
+                                break
+                            msg = f"Plex [{self.server_settings.name}]: {plex_movie.title} as watched for {user.title} in {library_name}"
                             if not dryrun:
                                 try:
                                     plex_movie.markWatched()
+                                    record_pending_sync(
+                                        self.env,
+                                        stored_movie,
+                                        "Plex",
+                                        MediaItem(
+                                            identifiers=plex_identifiers,
+                                            status=stored_movie.status,
+                                        ),
+                                    )
                                 except Exception as e:
                                     logger.error(
                                         f"Plex: Failed to mark {plex_movie.title} as watched, Error: {e}"
@@ -535,12 +923,88 @@ class Plex:
                                 target_item_id=target_item_id,
                                 reason="dry-run" if dryrun else None,
                             )
+                        elif (
+                            stored_movie.status.manually_unwatched
+                            and stored_movie.status.manual_unwatched_at is not None
+                        ):
+                            if (
+                                not plex_movie.isWatched
+                                and plex_movie.viewOffset <= 10_000
+                            ):
+                                add_outcome(
+                                    "skipped",
+                                    stored_movie,
+                                    target_identifiers=plex_identifiers,
+                                    target_item_id=target_item_id,
+                                    reason="already unwatched",
+                                )
+                                break
+                            msg = f"Plex [{self.server_settings.name}]: {plex_movie.title} as unwatched for {user.title} in {library_name}"
+                            if not dryrun:
+                                try:
+                                    plex_movie.markUnwatched()
+                                    plex_movie.updateTimeline(0)
+                                    record_pending_sync(
+                                        self.env,
+                                        stored_movie,
+                                        "Plex",
+                                        MediaItem(
+                                            identifiers=plex_identifiers,
+                                            status=stored_movie.status,
+                                        ),
+                                    )
+                                except Exception as e:
+                                    logger.error(
+                                        f"Plex: Failed to mark {plex_movie.title} as unwatched, Error: {e}"
+                                    )
+                                    add_outcome(
+                                        "failed",
+                                        stored_movie,
+                                        completed=False,
+                                        target_item_id=target_item_id,
+                                        reason=str(e),
+                                    )
+                                    continue
+
+                            logger.success(f"{'[DRYRUN] ' if dryrun else ''}{msg}")
+                            add_outcome(
+                                "skipped" if dryrun else "applied",
+                                stored_movie,
+                                completed=False,
+                                target_identifiers=plex_identifiers,
+                                target_item_id=target_item_id,
+                                reason="dry-run" if dryrun else None,
+                            )
                         else:
-                            msg = f"Plex: {plex_movie.title} as partially watched for {floor(stored_movie.status.time / 60_000)} minutes for {user.title} in {library_name}"
+                            if (
+                                not plex_movie.isWatched
+                                and abs(
+                                    plex_movie.viewOffset - stored_movie.status.time
+                                )
+                                <= 10_000
+                            ):
+                                add_outcome(
+                                    "skipped",
+                                    stored_movie,
+                                    target_identifiers=plex_identifiers,
+                                    target_item_id=target_item_id,
+                                    reason="progress already matches",
+                                )
+                                break
+                            msg = f"Plex [{self.server_settings.name}]: {plex_movie.title} as partially watched for {floor(stored_movie.status.time / 60_000)} minutes for {user.title} in {library_name}"
                             if not dryrun:
                                 try:
                                     plex_movie.markUnwatched()  # Unmark as watched first so completed status is set to false
                                     plex_movie.updateTimeline(stored_movie.status.time)
+                                    record_pending_sync(
+                                        self.env,
+                                        stored_movie,
+                                        "Plex",
+                                        MediaItem(
+                                            identifiers=plex_identifiers,
+                                            status=stored_movie.status,
+                                        ),
+                                    )
                                 except Exception as e:
                                     logger.error(
                                         f"Plex: Failed to update {plex_movie.title} timeline, Error: {e}"
@@ -649,10 +1113,32 @@ class Plex:
                                         plex_episode, "ratingKey", None
                                     )
                                     if stored_ep.status.completed:
-                                        msg = f"Plex: {plex_show.title} {plex_episode.title} as watched for {user.title} in {library_name}"
+                                        if (
+                                            plex_episode.isWatched
+                                            and plex_episode.viewOffset < 60_000
+                                        ):
+                                            add_outcome(
+                                                "skipped",
+                                                stored_ep,
+                                                target_identifiers=plex_episode_identifiers,
+                                                series_identifiers=plex_show_identifiers,
+                                                target_item_id=target_item_id,
+                                                reason="already watched",
+                                            )
+                                            break
+                                        msg = f"Plex [{self.server_settings.name}]: {plex_show.title} {plex_episode.title} as watched for {user.title} in {library_name}"
                                         if not dryrun:
                                             try:
                                                 plex_episode.markWatched()
+                                                record_pending_sync(
+                                                    self.env,
+                                                    stored_ep,
+                                                    "Plex",
+                                                    MediaItem(
+                                                        identifiers=plex_episode_identifiers,
+                                                        status=stored_ep.status,
+                                                    ),
+                                                )
                                             except Exception as e:
                                                 logger.error(
                                                     f"Plex: Failed to mark {plex_show.title} {plex_episode.title} as watched, Error: {e}"
@@ -688,12 +1174,96 @@ class Plex:
                                             target_item_id=target_item_id,
                                             reason="dry-run" if dryrun else None,
                                         )
+                                    elif (
+                                        stored_ep.status.manually_unwatched
+                                        and stored_ep.status.manual_unwatched_at
+                                        is not None
+                                    ):
+                                        if (
+                                            not plex_episode.isWatched
+                                            and plex_episode.viewOffset <= 10_000
+                                        ):
+                                            add_outcome(
+                                                "skipped",
+                                                stored_ep,
+                                                target_identifiers=plex_episode_identifiers,
+                                                series_identifiers=plex_show_identifiers,
+                                                target_item_id=target_item_id,
+                                                reason="already unwatched",
+                                            )
+                                            break
+                                        msg = f"Plex [{self.server_settings.name}]: {plex_show.title} {plex_episode.title} as unwatched for {user.title} in {library_name}"
+                                        if not dryrun:
+                                            try:
+                                                plex_episode.markUnwatched()
+                                                plex_episode.updateTimeline(0)
+                                                record_pending_sync(
+                                                    self.env,
+                                                    stored_ep,
+                                                    "Plex",
+                                                    MediaItem(
+                                                        identifiers=plex_episode_identifiers,
+                                                        status=stored_ep.status,
+                                                    ),
+                                                )
+                                            except Exception as e:
+                                                logger.error(
+                                                    f"Plex: Failed to mark {plex_show.title} {plex_episode.title} as unwatched, Error: {e}"
+                                                )
+                                                add_outcome(
+                                                    "failed",
+                                                    stored_ep,
+                                                    completed=False,
+                                                    series_identifiers=stored_series.identifiers,
+                                                    target_item_id=target_item_id,
+                                                    reason=str(e),
+                                                )
+                                                continue
+
+                                        logger.success(
+                                            f"{'[DRYRUN] ' if dryrun else ''}{msg}"
+                                        )
+                                        add_outcome(
+                                            "skipped" if dryrun else "applied",
+                                            stored_ep,
+                                            completed=False,
+                                            target_identifiers=plex_episode_identifiers,
+                                            series_identifiers=plex_show_identifiers,
+                                            target_item_id=target_item_id,
+                                            reason="dry-run" if dryrun else None,
+                                        )
                                     else:
-                                        msg = f"Plex: {plex_show.title} {plex_episode.title} as partially watched for {floor(stored_ep.status.time / 60_000)} minutes for {user.title} in {library_name}"
+                                        if (
+                                            not plex_episode.isWatched
+                                            and abs(
+                                                plex_episode.viewOffset
+                                                - stored_ep.status.time
+                                            )
+                                            <= 10_000
+                                        ):
+                                            add_outcome(
+                                                "skipped",
+                                                stored_ep,
+                                                target_identifiers=plex_episode_identifiers,
+                                                series_identifiers=plex_show_identifiers,
+                                                target_item_id=target_item_id,
+                                                reason="progress already matches",
+                                            )
+                                            break
+                                        msg = f"Plex [{self.server_settings.name}]: {plex_show.title} {plex_episode.title} as partially watched for {floor(stored_ep.status.time / 60_000)} minutes for {user.title} in {library_name}"
                                         if not dryrun:
                                             try:
                                                 plex_episode.updateTimeline(
                                                     stored_ep.status.time
+                                                )
+                                                record_pending_sync(
+                                                    self.env,
+                                                    stored_ep,
+                                                    "Plex",
+                                                    MediaItem(
+                                                        identifiers=plex_episode_identifiers,
+                                                        status=stored_ep.status,
+                                                    ),
                                                 )
                                             except Exception as e:
                                                 logger.error(
@@ -928,7 +1498,11 @@ class Plex:
 
                     except Exception as e:
                         logger.error(
-                            f"Plex: Failed to update watched for {plex_user.title} in {resolved_library}, Error: {e}",
+                            "Plex [{}]: Failed to update watched for {} in {}: {}",
+                            self.server_settings.name,
+                            plex_user.title,
+                            resolved_library,
+                            e,
                         )
                         continue
 

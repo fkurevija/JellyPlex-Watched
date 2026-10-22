@@ -156,6 +156,54 @@ def test_plex_library_discovery_uses_shared_user_access():
     assert server.get_user_libraries(user) == {}
 
 
+def test_plex_user_library_sizes_uses_size_only_section_queries():
+    server = object.__new__(Plex)
+    admin = Mock(spec=MyPlexUser)
+    section = SimpleNamespace(
+        title="Movies",
+        totalViewSize=Mock(return_value=42),
+    )
+    server.admin_user = admin
+    server.plex = SimpleNamespace(
+        library=SimpleNamespace(sections=Mock(return_value=[section]))
+    )
+
+    assert server.get_user_library_sizes(admin) == {"Movies": 42}
+    section.totalViewSize.assert_called_once_with(includeCollections=False)
+
+
+def test_jellyfin_user_library_sizes_queries_item_counts_by_library_type():
+    server = object.__new__(Jellyfin)
+    server.query = Mock(
+        side_effect=[
+            {
+                "Items": [
+                    {"Name": "Movies", "Id": "movies-id"},
+                    {"Name": "Shows", "Id": "shows-id"},
+                ]
+            },
+            {"TotalRecordCount": 42},
+            {"TotalRecordCount": 7},
+        ]
+    )
+
+    assert server.get_user_library_sizes(
+        ("alice", "user-id"), {"Movies": "movies", "Shows": "tvshows"}
+    ) == {
+        "Movies": 42,
+        "Shows": 7,
+    }
+    assert server.query.call_args_list[0].args == ("/Users/user-id/Views", "get")
+    assert (
+        server.query.call_args_list[1].args[0]
+        == "/Users/user-id/Items?ParentId=movies-id&Recursive=True&IncludeItemTypes=Movie&Limit=1"
+    )
+    assert (
+        server.query.call_args_list[2].args[0]
+        == "/Users/user-id/Items?ParentId=shows-id&Recursive=True&IncludeItemTypes=Series&Limit=1"
+    )
+
+
 @pytest.mark.parametrize("failure_stage", ["token", "login", "sections"])
 def test_discovery_failure_does_not_discard_healthy_scopes(failure_stage):
     settings = settings_override()

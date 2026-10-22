@@ -162,6 +162,12 @@ credential in the error.
 The highest-priority `JPW_SERVER_TOKENS` map replaces lower-priority maps as a
 whole before its entries are applied to the effective server list.
 
+For a Plex server shared with your Plex account, the server's `token` may need
+to be that server's shared-resource token. If that token cannot access Plex.tv
+account APIs, set `account_token` to your account-level Plex token as well.
+The server token is used for that server's media API; the account token is used
+to resolve Plex users and the account owner. Keep both credentials private.
+
 A legacy `PLEX_TOKEN` without `PLEX_BASEURL` is a token-only override only when
 exactly one Plex server is already configured by a higher-priority source. A
 complete legacy base URL/token configuration retains its indexed server-list
@@ -256,6 +262,24 @@ C has a permitted path to each. This requires no intermediate successful write.
 Settings are loaded once at startup and their lookup indexes are cached for
 that process. Restart the application after changing the YAML, dotenv file, or
 environment values; the regular loop does not live-reload configuration.
+
+### Logs and progress
+
+Adapter logs identify the configured server name (for example, `plex-moria`
+or `plex-scottflix`) as well as the server type. Progress logs show completed
+movie/show counts and a rough estimated time remaining, refreshed in 10%
+increments. During updates, progress is measured in completed source batches
+for each destination server. Inventory estimates begin after the server returns
+the item list and are based on the observed processing rate, so they can vary
+with item complexity and server response times.
+
+For matching user/library groups across servers, watched-state discovery uses
+the smallest library as the media catalog and looks up only catalog items on
+the other servers. Matching unwatched items are retained only as identity
+baselines so updates can find server-specific media IDs; they never originate
+watch-state updates. If a reliable library size or catalog cannot be obtained,
+that matching scope is skipped rather than scanning a larger library or
+silently broadening the catalog.
 
 ## Installation
 

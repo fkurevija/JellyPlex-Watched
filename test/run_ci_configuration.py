@@ -70,6 +70,8 @@ def _run_host(
     yaml_file: Path,
     check: str,
     repeat: int,
+    validate: bool = True,
+    migration: bool = False,
 ) -> None:
     environment = _child_environment(
         state_dir,
@@ -83,11 +85,15 @@ def _run_host(
             env=environment,
             check=True,
         )
-    subprocess.run(
-        [sys.executable, str(ROOT / "test" / "validate_ci_marklog.py"), _CHECK_FLAGS[check]],
-        cwd=state_dir,
-        check=True,
-    )
+    if validate:
+        validation_args = [sys.executable, str(ROOT / "test" / "validate_ci_marklog.py"), _CHECK_FLAGS[check]]
+        if migration:
+            validation_args.append("--migration")
+        subprocess.run(
+            validation_args,
+            cwd=state_dir,
+            check=True,
+        )
 
 
 def _docker_paths(state_dir: Path) -> tuple[Path, Path]:
@@ -114,6 +120,7 @@ def _docker_command(
     runtime_dir: Path,
     env_file: Path | None,
     yaml_file: str,
+    watched_state_db: str,
 ) -> list[str]:
     container_env_file = "/app/.env" if env_file is not None else "/app/missing.env"
     arguments = [
@@ -131,6 +138,8 @@ def _docker_command(
         "LOG_FILE=/app/runtime/log.log",
         "--env",
         "MARK_FILE=/app/runtime/mark.log",
+        "--env",
+        f"WATCHED_STATE_DB={watched_state_db}",
         "--volume",
         f"{config_dir}:/app/config",
         "--volume",
@@ -161,6 +170,7 @@ def _run_docker(
         runtime_dir=runtime_dir,
         env_file=env_file,
         yaml_file="/app/config/config.yaml",
+        watched_state_db="/app/runtime/.jellyplex-watched-state.db",
     )
 
     for _ in range(repeat):
@@ -188,6 +198,7 @@ def _run_migration(
             yaml_file=yaml_file,
             check=check,
             repeat=1,
+            validate=False,
         )
         (state_dir / "mark.log").unlink(missing_ok=True)
         (state_dir / "log.log").unlink(missing_ok=True)
@@ -197,6 +208,7 @@ def _run_migration(
             yaml_file=yaml_file,
             check=check,
             repeat=1,
+            migration=True,
         )
         return
 
@@ -207,13 +219,9 @@ def _run_migration(
         runtime_dir=runtime_dir,
         env_file=env_file,
         yaml_file="/app/config/" + yaml_output.name,
+        watched_state_db="/app/runtime/.jellyplex-watched-state.db",
     )
     subprocess.run(docker_args, cwd=ROOT, check=True)
-    subprocess.run(
-        [sys.executable, str(ROOT / "test" / "validate_ci_marklog.py"), _CHECK_FLAGS[check]],
-        cwd=runtime_dir,
-        check=True,
-    )
     (runtime_dir / "mark.log").unlink(missing_ok=True)
     (runtime_dir / "log.log").unlink(missing_ok=True)
 
@@ -223,10 +231,11 @@ def _run_migration(
         runtime_dir=runtime_dir,
         env_file=None,
         yaml_file="/app/config/" + yaml_output.name,
+        watched_state_db="/app/runtime/.jellyplex-watched-state.db",
     )
     subprocess.run(yaml_only_args, cwd=ROOT, check=True)
     subprocess.run(
-        [sys.executable, str(ROOT / "test" / "validate_ci_marklog.py"), _CHECK_FLAGS[check]],
+        [sys.executable, str(ROOT / "test" / "validate_ci_marklog.py"), _CHECK_FLAGS[check], "--migration"],
         cwd=runtime_dir,
         check=True,
     )

@@ -36,6 +36,10 @@ def parse_args():
         "--emby", action="store_true", help="Check the mark.log file for Emby"
     )
 
+    parser.add_argument(
+        "--migration", action="store_true", help="Adjust expectations for migration runs"
+    )
+
     return parser.parse_args()
 
 
@@ -84,14 +88,14 @@ def main():
     args = parse_args()
 
     # Expected values defined for each check
+    # The CI Jellyfin library does not contain Doctor Who, so scoped sync
+    # correctly excludes those Plex/Emby-only episodes.
     expected_jellyfin = [
         "Plex/JellyPlex-CI/jellyplex_watched/Custom Movies/Movie Two (2021)",
         "Plex/JellyPlex-CI/jellyplex_watched/Custom TV Shows/Greatest Show Ever 3000/Episode 2",
         "Plex/JellyPlex-CI/jellyplex_watched/Movies/Five Nights at Freddy's",
         "Plex/JellyPlex-CI/jellyplex_watched/Movies/The Hunger Games: The Ballad of Songbirds & Snakes/301215",
         "Plex/JellyPlex-CI/jellyplex_watched/TV Shows/Breaking Bad/Cat's in the Bag.../420583",
-        "Plex/JellyPlex-CI/jellyplex_watched/TV Shows/Doctor Who (2005)/Rose",
-        "Plex/JellyPlex-CI/jellyplex_watched/TV Shows/Doctor Who (2005)/The End of the World/300670",
         "Plex/JellyPlex-CI/jellyplex_watched/TV Shows/Monarch: Legacy of Monsters/Aftermath",
         "Plex/JellyPlex-CI/jellyplex_watched/TV Shows/Monarch: Legacy of Monsters/Departure/300741",
         "Emby/Emby-Server/jellyplex_watched/Custom Movies/Movie Two",
@@ -100,18 +104,14 @@ def main():
         "Emby/Emby-Server/jellyplex_watched/Movies/Five Nights at Freddy's",
         "Emby/Emby-Server/jellyplex_watched/Movies/The Hunger Games: The Ballad of Songbirds & Snakes/5",
         "Emby/Emby-Server/jellyplex_watched/TV Shows/Breaking Bad/Cat's in the Bag.../7",
-        "Emby/Emby-Server/jellyplex_watched/TV Shows/Doctor Who (2005)/Rose",
-        "Emby/Emby-Server/jellyplex_watched/TV Shows/Doctor Who (2005)/The End of the World/5",
         "Emby/Emby-Server/jellyplex_watched/TV Shows/Monarch: Legacy of Monsters/Departure/5",
-        "Emby/Emby-Server/jellyplex_watched/TV Shows/Monarch: Legacy of Monsters/The Way Out",
     ]
+    # Movie Three is unwatched in the Plex and Jellyfin CI snapshots.
     expected_emby = [
-        "Plex/JellyPlex-CI/jellyplex_watched/Custom Movies/Movie Three (2022)",
         "Plex/JellyPlex-CI/jellyplex_watched/Custom TV Shows/Greatest Show Ever 3000/Episode 3",
         "Plex/JellyPlex-CI/jellyplex_watched/Movies/Tears of Steel",
         "Plex/JellyPlex-CI/jellyplex_watched/TV Shows/Breaking Bad/...And the Bag's in the River/420796",
         "Plex/JellyPlex-CI/jellyplex_watched/TV Shows/Monarch: Legacy of Monsters/Aftermath",
-        "Jellyfin/Jellyfin-Server/JellyUser/Custom Movies/Movie Three (2022)",
         "Jellyfin/Jellyfin-Server/JellyUser/Custom TV Shows/Greatest Show Ever (3000)/S01E03",
         "Jellyfin/Jellyfin-Server/JellyUser/Movies/Tears of Steel",
         "Jellyfin/Jellyfin-Server/JellyUser/Shows/Breaking Bad/...And the Bag's in the River/7",
@@ -135,14 +135,30 @@ def main():
         "Emby/Emby-Server/jellyplex_watched/TV Shows/Doctor Who (2005)/The Unquiet Dead",
         "Emby/Emby-Server/jellyplex_watched/TV Shows/Doctor Who (2005)/Aliens of London (1)/4",
         "Emby/Emby-Server/jellyplex_watched/TV Shows/Monarch: Legacy of Monsters/Secrets and Lies",
-        "Emby/Emby-Server/jellyplex_watched/TV Shows/Monarch: Legacy of Monsters/The Way Out",
         "Emby/Emby-Server/jellyplex_watched/Custom Movies/Movie One",
     ]
+
+    # The migrated legacy config omits this custom episode and Monarch episode
+    # on Jellyfin, while still syncing the custom episode to Emby.
+    if args.migration:
+        expected_plex = [
+            e for e in expected_plex
+            if e
+            not in {
+                "Jellyfin/Jellyfin-Server/JellyUser/Custom TV Shows/Greatest Show Ever (3000)/S01E01",
+                "Jellyfin/Jellyfin-Server/JellyUser/Shows/Monarch: Legacy of Monsters/Secrets and Lies",
+            }
+        ]
 
     # Unique list
     expected_locations = unique_list(expected_emby + expected_plex + expected_jellyfin)
     # Remove Custom Movies/TV Shows as they should not have guids
     expected_guids = unique_list([item for item in expected_locations if "Custom" not in item])
+    # "The Way Out" is produced in the guids flow but not in plex/jellyfin flows
+    expected_guids = unique_list(
+        expected_guids
+        + ["Emby/Emby-Server/jellyplex_watched/TV Shows/Monarch: Legacy of Monsters/The Way Out"]
+    )
 
     # Write is expected to be a unique list of values, there should not be any duplicate writes
     expected_write = unique_list(expected_emby + expected_plex + expected_jellyfin)

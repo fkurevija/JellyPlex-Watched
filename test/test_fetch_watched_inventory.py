@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -66,6 +67,81 @@ def test_fetch_keeps_servers_separate_and_preserves_plex_objects():
     first.get_watched.assert_called_once_with([user], ["Movies"])
     second.get_watched.assert_called_once_with([user], ["Movies"])
     assert fetch_watched_inventory({}) == {}
+
+
+@pytest.mark.parametrize(
+    ("catalog_available", "size_available"),
+    [(True, True), (False, True), (True, False)],
+)
+def test_fetch_uses_smallest_matching_library_as_catalog(
+    catalog_available, size_available
+):
+    settings = settings_override(
+        plex=[],
+        jellyfin=[
+            {
+                "name": "jellyfin-small",
+                "baseurl": "http://jellyfin-small",
+                "token": "x",
+                "sync_to": ["emby-large"],
+            }
+        ],
+        emby=[
+            {
+                "name": "emby-large",
+                "baseurl": "http://emby-large",
+                "token": "x",
+                "sync_to": ["jellyfin-small"],
+            }
+        ],
+    )
+    small = object.__new__(Jellyfin)
+    small.server_settings = settings.jellyfin[0]
+    large = object.__new__(Emby)
+    large.server_settings = settings.emby[0]
+    catalog = LibraryData(title="Movies")
+    small.get_user_library_catalog = Mock(
+        return_value=catalog if catalog_available else None
+    )
+    large.get_user_library_catalog = Mock(return_value=LibraryData(title="Movies"))
+    empty = UserData(libraries={"Movies": LibraryData(title="Movies")})
+    small.get_watched = Mock(return_value={"alice": empty})
+    large.get_watched = Mock(return_value={"alice": empty})
+
+    fetch_watched_inventory(
+        {
+            small: [
+                UserLibraries(
+                    ("alice", "small-id"),
+                    {"Movies": "movies"},
+                    {"Movies": 20} if size_available else None,
+                )
+            ],
+            large: [
+                UserLibraries(
+                    ("alice", "large-id"),
+                    {"Movies": "movies"},
+                    {"Movies": 5000} if size_available else None,
+                )
+            ],
+        },
+        settings,
+    )
+
+    if size_available:
+        small.get_user_library_catalog.assert_called_once_with(
+            ("alice", "small-id"), "Movies", "movies"
+        )
+        large.get_user_library_catalog.assert_not_called()
+    else:
+        small.get_user_library_catalog.assert_not_called()
+        large.get_user_library_catalog.assert_not_called()
+    if catalog_available and size_available:
+        assert small.get_watched.call_args.kwargs["catalogs"] == {"Movies": catalog}
+        assert large.get_watched.call_args.kwargs["catalogs"] == {"Movies": catalog}
+    else:
+        small.get_watched.assert_not_called()
+        large.get_watched.assert_not_called()
 
 
 def test_custom_library_uses_discovered_type_and_only_selected_history_is_fetched():
@@ -148,6 +224,7 @@ def test_unknown_destination_is_skipped_but_empty_history_is_updated(failure):
 def test_jellyfin_empty_history_is_distinct_from_invalid_response(response):
     server = object.__new__(Jellyfin)
     server.server_type = "Jellyfin"
+    server.server_settings = SimpleNamespace(name="jellyfin-test")
     server.query = Mock(return_value=response)
     result = server.get_user_library_watched("alice", "a", "movies", "m", "Movies")
     if response == {"Items": []}:
@@ -158,6 +235,7 @@ def test_jellyfin_empty_history_is_distinct_from_invalid_response(response):
 
 def test_plex_failed_library_read_is_not_an_empty_history():
     server = object.__new__(Plex)
+    server.server_settings = SimpleNamespace(name="plex-test")
     user_plex = Mock()
     library = Mock(title="Movies", type="movie")
     user_plex.library.section.side_effect = RuntimeError("read failed")

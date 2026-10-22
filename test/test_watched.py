@@ -1,3 +1,6 @@
+import json
+import sqlite3
+from datetime import timedelta, timezone
 import os
 import sys
 from datetime import datetime
@@ -23,7 +26,16 @@ from src.watched import (  # noqa: E402
     Series,
     UserData,
     WatchedStatus,
+    apply_manual_unwatched_state,
+    check_remove_entry,
     cleanup_watched,
+    compare_media_items,
+    initialize_watched_state_db,
+    load_state_index,
+    was_previously_watched,
+    mediaitem_state_key,
+    Ord,
+    record_pending_sync,
 )
 
 viewed_date = datetime.today()
@@ -779,3 +791,1093 @@ def test_cleanup_coalesces_fan_in_updates_independent_of_source_order():
     assert pending[0].source_user == "alice"
     assert pending[0].library_data.movies[0].status.time == 20 * 60 * 1_000
     assert reversed_pending[0] == pending[0]
+
+def test_json_state_is_migrated_and_unwatched_transition_is_persisted(tmp_path):
+    item = MediaItem(
+        identifiers=MediaIdentifiers(
+            title="Migrated Item",
+            locations=("Migrated Item.mkv",),
+            imdb_id="tt7654321",
+        ),
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    json_path = tmp_path / "watched.json"
+    db_path = tmp_path / "watched.db"
+    json_path.write_text(
+        json.dumps(
+            {
+                mediaitem_state_key(item): {
+                    "completed": True,
+                    "time": 0,
+                    "viewed_date": "2024-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = {
+        "WATCHED_STATE_DB": str(db_path),
+        "WATCHED_STATE_FILE": str(json_path),
+    }
+    watched = {
+        "user": UserData(
+            libraries={
+                "Movies": LibraryData(title="Movies", movies=[item]),
+            }
+        )
+    }
+
+    apply_manual_unwatched_state(watched, env)
+
+    assert item.status.time == 0
+    assert item.status.viewed_date > datetime(2024, 1, 1, tzinfo=timezone.utc)
+    with sqlite3.connect(initialize_watched_state_db(env)) as connection:
+        row = connection.execute(
+            "SELECT completed, resume_ms, manual_unwatched_at FROM media_state"
+        ).fetchone()
+    assert row == (0, 0, item.status.viewed_date.isoformat())
+
+
+def test_watched_state_is_scoped_to_source_server(tmp_path):
+    item_identifiers = MediaIdentifiers(
+        title="Source Scoped Item",
+        locations=("Source Scoped Item.mkv",),
+        imdb_id="tt7654322",
+    )
+    watched_item = MediaItem(
+        identifiers=item_identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=item_identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {
+            "user": UserData(
+                libraries={
+                    "Movies": LibraryData(title="Movies", movies=[watched_item])
+                }
+            )
+        },
+        env,
+        "Plex",
+    )
+    apply_manual_unwatched_state(
+        {
+            "user": UserData(
+                libraries={
+                    "Movies": LibraryData(title="Movies", movies=[unwatched_item])
+                }
+            )
+        },
+        env,
+        "Emby",
+    )
+
+    assert unwatched_item.status.viewed_date == datetime(
+        2024, 1, 1, tzinfo=timezone.utc
+    )
+
+
+def test_manual_unwatched_state_wins_over_partial_progress():
+    identifiers = MediaIdentifiers(
+        title="Reset Item",
+        locations=("Reset Item.mkv",),
+        imdb_id="tt7654323",
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+            manually_unwatched=True,
+        ),
+    )
+    partial_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=300_000,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+
+    assert compare_media_items(unwatched_item, partial_item, settings_override(), 100.0) == Ord.A_BETTER
+    assert compare_media_items(partial_item, unwatched_item, settings_override(), 100.0) == Ord.B_BETTER
+
+    completed_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    assert compare_media_items(unwatched_item, completed_item, settings_override(), 100.0) == Ord.A_BETTER
+    assert compare_media_items(completed_item, unwatched_item, settings_override(), 100.0) == Ord.B_BETTER
+
+
+def test_completed_state_beats_newer_unknown_incomplete_state():
+    identifiers = MediaIdentifiers(title="Unknown Item")
+    completed_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    unknown_incomplete_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+
+    assert (
+        compare_media_items(completed_item, unknown_incomplete_item, settings_override(), 100.0)
+        == Ord.A_BETTER
+    )
+    assert (
+        compare_media_items(unknown_incomplete_item, completed_item, settings_override(), 100.0)
+        == Ord.B_BETTER
+    )
+
+
+def test_unknown_zero_progress_item_does_not_remove_real_state():
+    identifiers = MediaIdentifiers(title="Unknown Cleanup Item")
+    real_state = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    unknown_state = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+
+    assert not check_remove_entry(real_state, unknown_state, settings_override(), 100.0)
+
+
+def test_unconfirmed_manual_flag_does_not_remove_real_state():
+    identifiers = MediaIdentifiers(title="Unconfirmed Manual Flag")
+    real_state = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    synthetic_state = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+            manually_unwatched=True,
+        ),
+    )
+
+    assert not check_remove_entry(real_state, synthetic_state, settings_override(), 100.0)
+
+
+
+def test_unknown_zero_progress_source_loses_to_meaningful_state():
+    identifiers = MediaIdentifiers(
+        title="Unknown Source Item", locations=("unknown-source-item.mkv",)
+    )
+    unknown_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    partial_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=420_000,
+            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert check_remove_entry(unknown_item, partial_item, settings_override(), 100.0)
+
+
+
+
+def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Propagated Reset",
+        locations=("Propagated Reset.mkv",),
+        imdb_id="tt7654324",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[watched_item])})},
+        env,
+        "Plex",
+    )
+    record_pending_sync(env, unwatched_item, "Jellyfin")
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[unwatched_item])})},
+        env,
+        "Jellyfin",
+    )
+
+    assert not unwatched_item.status.manually_unwatched
+
+    restored_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[restored_item])})},
+        env,
+        "Jellyfin",
+    )
+    assert restored_item.status.completed
+    assert not restored_item.status.manually_unwatched
+
+
+def test_pending_sync_matches_destination_without_server_scoped_key(tmp_path):
+    source_identifiers = MediaIdentifiers(
+        title="Episode From Plex",
+        locations=("episode.mkv",),
+        imdb_id="tt7654325",
+    )
+    destination_identifiers = MediaIdentifiers(
+        title="Episode From Jellyfin",
+        locations=("episode.mkv",),
+        imdb_id="tt7654325",
+    )
+    source_watched = MediaItem(
+        identifiers=source_identifiers,
+        status=WatchedStatus(
+            completed=True,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    destination_unwatched = MediaItem(
+        identifiers=destination_identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[source_watched])})},
+        env,
+        "Plex",
+    )
+    record_pending_sync(env, destination_unwatched, "Jellyfin")
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[destination_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+
+    assert not destination_unwatched.status.manually_unwatched
+    with sqlite3.connect(initialize_watched_state_db(env)) as connection:
+        pending = connection.execute("SELECT COUNT(*) FROM pending_sync").fetchone()
+    assert pending == (0,)
+
+
+def test_diverged_pending_sync_is_discarded_before_manual_unwatched_detection(
+    tmp_path,
+):
+    identifiers = MediaIdentifiers(
+        title="Diverged Pending Item",
+        locations=("diverged-pending-item.mkv",),
+        imdb_id="tt7654328",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[watched_item])})},
+        env,
+        "Jellyfin",
+    )
+    record_pending_sync(env, watched_item, "Jellyfin")
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[unwatched_item])})},
+        env,
+        "Jellyfin",
+    )
+
+    assert unwatched_item.status.manually_unwatched
+    with sqlite3.connect(initialize_watched_state_db(env)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pending_sync").fetchone() == (0,)
+
+
+def test_manual_unwatch_detected_after_our_own_propagated_rewatch(tmp_path):
+    """
+    Regression test: this process's own writes to a destination server (via
+    record_pending_sync) never used to update that destination's own
+    media_state baseline - only a later READ of that server would. If, in a
+    single process run, we push a completed=True state to a destination
+    (e.g. Plex -> Jellyfin rewatch propagation) and the destination's real
+    state is changed again (a genuine manual unwatch) before the NEXT read
+    of that destination, the stale baseline (still showing whatever was
+    there BEFORE our write) makes the transition invisible: previous=False,
+    current=False, no change detected. That silently dropped a real manual
+    unwatch and let the completed state we just pushed get re-applied
+    forever.
+    """
+    identifiers = MediaIdentifiers(
+        title="Propagated Then Rewatched Elsewhere",
+        locations=("propagated-then-unwatched.mkv",),
+        imdb_id="tt7654338",
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    # Jellyfin has never had this item (its baseline is not-completed, e.g.
+    # it was never watched there before).
+    jellyfin_never_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_never_watched])})},
+        env,
+        "Jellyfin",
+    )
+
+    # Plex has a completed item, which this process propagates to Jellyfin
+    # (i.e. our own write, recorded via record_pending_sync).
+    plex_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    record_pending_sync(env, plex_watched, "Jellyfin")
+
+    # In the very same run (or before the next read of Jellyfin), the user
+    # manually unwatches it directly on Jellyfin.
+    jellyfin_freshly_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_freshly_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+
+    # The manual unwatch must be detected as a genuine transition (baseline
+    # completed=True from our own propagated write -> now False), not missed.
+    assert jellyfin_freshly_unwatched.status.manually_unwatched
+    assert jellyfin_freshly_unwatched.status.manual_unwatched_at is not None
+
+
+def test_stale_pending_sync_does_not_suppress_new_manual_unwatch(tmp_path):
+    """A leftover pending_sync row from a much earlier sync attempt must not
+    permanently mask a brand-new, unrelated manual-unwatched transition just
+    because its expected completed/time values happen to coincide. Pending
+    entries are only meant to suppress detection for the one cycle
+    immediately following our own write; once they're stale (older than
+    WATCHED_STATE_PENDING_TTL_HOURS) they must be ignored."""
+    identifiers = MediaIdentifiers(
+        title="Stale Pending Item",
+        locations=("stale-pending-item.mkv",),
+        imdb_id="tt7654329",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[watched_item])})},
+        env,
+        "Plex",
+    )
+    record_pending_sync(env, unwatched_item, "Plex")
+
+    # record_pending_sync also proactively baselines Plex's own media_state
+    # row to completed=False (the value it just wrote) - so simulate a full
+    # cycle passing where the item is genuinely rewatched again on Plex,
+    # re-establishing a completed=True baseline, before the real unwatch
+    # under test below.
+    rewatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[rewatched_item])})},
+        env,
+        "Plex",
+    )
+
+    # Backdate the pending row well past the TTL, simulating a dangling
+    # entry left over from an old/unrelated sync attempt.
+    db_path = initialize_watched_state_db(env)
+    stale_created_at = (
+        datetime.now(timezone.utc) - timedelta(hours=48)
+    ).isoformat()
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE pending_sync SET created_at = ? WHERE destination_server = 'Plex'",
+            (stale_created_at,),
+        )
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[unwatched_item])})},
+        env,
+        "Plex",
+    )
+
+    assert unwatched_item.status.manually_unwatched
+    assert unwatched_item.status.manual_unwatched_at is not None
+
+
+def test_manual_unwatched_transition_remains_explicit_until_watched(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Persistent Reset",
+        locations=("Persistent Reset.mkv",),
+        imdb_id="tt7654326",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    watched = {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[watched_item])})}
+    unwatched = {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[unwatched_item])})}
+
+    apply_manual_unwatched_state(watched, env, "Jellyfin")
+    apply_manual_unwatched_state(unwatched, env, "Jellyfin")
+    assert unwatched_item.status.manually_unwatched
+
+    next_unwatched = unwatched_item.model_copy(deep=True)
+    next_unwatched.status.manually_unwatched = False
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[next_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+    assert next_unwatched.status.manually_unwatched
+
+    restored = watched_item.model_copy(deep=True)
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[restored])})},
+        env,
+        "Jellyfin",
+    )
+    assert not restored.status.manually_unwatched
+
+
+def test_indexed_state_preserves_transition_timestamps(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Indexed Jellyfin Item",
+        locations=("indexed-jellyfin-item.mkv",),
+        imdb_id="tt7654327",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[watched_item])})},
+        env,
+        "Jellyfin",
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[unwatched_item])})},
+        env,
+        "Jellyfin",
+    )
+
+    with sqlite3.connect(initialize_watched_state_db(env)) as connection:
+        state_changed_at, manual_unwatched_at = connection.execute(
+            "SELECT state_changed_at, manual_unwatched_at FROM media_state"
+        ).fetchone()
+
+    assert unwatched_item.status.manually_unwatched
+    assert state_changed_at
+    assert manual_unwatched_at
+    datetime.fromisoformat(state_changed_at)
+    datetime.fromisoformat(manual_unwatched_at)
+
+
+def test_tracked_unwatched_state_remains_collectable(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Tracked Unwatched Item",
+        locations=("tracked-unwatched-item.mkv",),
+        imdb_id="tt7654329",
+    )
+    item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[item])})},
+        env,
+        "Jellyfin",
+    )
+    item.status.completed = False
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[item])})},
+        env,
+        "Jellyfin",
+    )
+
+    env["_watched_state_index"] = load_state_index(env, "Jellyfin")
+    assert was_previously_watched(item, env)
+
+
+def test_cross_server_state_remains_collectable_for_unwatched_transition(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Cross Server Item",
+        locations=("cross-server-item.mkv",),
+        imdb_id="tt7654331",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = watched_item.model_copy(deep=True)
+    unwatched_item.status.completed = False
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[watched_item])})},
+        env,
+        "Plex",
+    )
+    env["_watched_state_index"] = load_state_index(env, "Jellyfin")
+
+    assert was_previously_watched(unwatched_item, env)
+
+
+def test_cross_server_state_does_not_collect_completed_items(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Cross Server Watched Item",
+        locations=("cross-server-watched-item.mkv",),
+        imdb_id="tt7654332",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[watched_item])})},
+        env,
+        "Plex",
+    )
+    env["_watched_state_index"] = load_state_index(env, "Jellyfin")
+
+    assert not was_previously_watched(watched_item, env)
+
+
+def test_cross_server_fallback_ignores_partial_baseline(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Cross Server Partial Item",
+        locations=("cross-server-partial-item.mkv",),
+        imdb_id="tt7654333",
+    )
+    partial_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=240_000,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    current_unwatched = partial_item.model_copy(deep=True)
+    current_unwatched.status.time = 0
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[partial_item])})},
+        env,
+        "Plex",
+    )
+    env["_watched_state_index"] = load_state_index(env, "Emby")
+
+    assert not was_previously_watched(current_unwatched, env)
+
+
+def test_cross_server_observation_does_not_create_manual_unwatched_state(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Cross Server Observation",
+        locations=("cross-server-observation.mkv",),
+        imdb_id="tt7654334",
+    )
+    plex_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    emby_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[plex_item])})},
+        env,
+        "Plex",
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[emby_item])})},
+        env,
+        "Emby",
+    )
+
+    assert not emby_item.status.manually_unwatched
+
+
+def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path):
+    """
+    Regression test: once a manual unwatch is detected and propagated (e.g.
+    Jellyfin -> Plex), the manual-unwatched marker used to stick forever on
+    the still-untouched server (Jellyfin), meaning a later, genuine rewatch
+    on the other server (Plex) was silently reverted every cycle instead of
+    propagating. A fresh completed transition on the other server must be
+    allowed to win instead.
+    """
+    identifiers = MediaIdentifiers(
+        title="Sticky Manual Unwatched",
+        locations=("sticky-manual-unwatched.mkv",),
+        imdb_id="tt7654336",
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    # Cycle 1: both servers show the item as watched (established baseline).
+    plex_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    jellyfin_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_watched])})},
+        env,
+        "Plex",
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_watched])})},
+        env,
+        "Jellyfin",
+    )
+
+    # Cycle 2: user unwatches on Jellyfin only; Plex is still watched.
+    jellyfin_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+    assert jellyfin_unwatched.status.manually_unwatched
+    plex_synced_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_synced_unwatched])})},
+        env,
+        "Plex",
+    )
+
+    # Cycle 3: Jellyfin is still untouched (incomplete), so its manual-unwatched
+    # marker keeps getting re-affirmed by design.
+    jellyfin_still_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_still_unwatched])})},
+        env,
+        "Jellyfin",
+    )
+    assert jellyfin_still_unwatched.status.manually_unwatched
+
+    # The user now rewatches on Plex: a genuine transition from incomplete to
+    # completed for Plex's own source-scoped state.
+    plex_rewatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_rewatched])})},
+        env,
+        "Plex",
+    )
+    assert not plex_rewatched.status.manually_unwatched
+
+    # The fresh Plex rewatch must win over Jellyfin's stale manual-unwatched
+    # marker instead of being reverted back to unwatched.
+    assert (
+        compare_media_items(plex_rewatched, jellyfin_still_unwatched, settings_override(), 100.0)
+        == Ord.A_BETTER
+    )
+    assert (
+        compare_media_items(jellyfin_still_unwatched, plex_rewatched, settings_override(), 100.0)
+        == Ord.B_BETTER
+    )
+
+    # Cycle 5+: even several cycles later (both sides observed again,
+    # unchanged), the override must still hold. A transient one-cycle flag
+    # would lose this after the first cycle; the persisted state_changed_at
+    # timestamp must not.
+    jellyfin_still_unwatched_again = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_still_unwatched_again])})},
+        env,
+        "Jellyfin",
+    )
+    plex_rewatched_again = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_rewatched_again])})},
+        env,
+        "Plex",
+    )
+    assert (
+        compare_media_items(plex_rewatched_again, jellyfin_still_unwatched_again, settings_override(), 100.0)
+        == Ord.A_BETTER
+    )
+    assert (
+        compare_media_items(jellyfin_still_unwatched_again, plex_rewatched_again, settings_override(), 100.0)
+        == Ord.B_BETTER
+    )
+
+
+def test_first_observation_does_not_override_concurrent_manual_unwatch(tmp_path):
+    """
+    Regression test: state_changed_at used to be set to `now()` whenever an
+    item had no previous DB row at all (first-ever observation), not only on
+    a genuine completed/time transition. If the OTHER server's item happened
+    to be observed for the very first time in the same cycle a manual
+    unwatch was recorded (e.g. right after a fresh Docker volume/DB reset, or
+    the first cycle an item is ever seen), its brand-new "first observation"
+    timestamp could spuriously postdate manual_unwatched_at and incorrectly
+    override the manual-unwatched marker - even though the other item's
+    completed state could be arbitrarily old history, not a fresh rewatch.
+    """
+    identifiers = MediaIdentifiers(
+        title="Concurrent First Observation",
+        locations=("concurrent-first-observation.mkv",),
+        imdb_id="tt7654337",
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    # Plex: a fresh manual unwatch is detected (previous row already existed
+    # as watched).
+    plex_watched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_watched])})},
+        env,
+        "Plex",
+    )
+    plex_unwatched = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[plex_unwatched])})},
+        env,
+        "Plex",
+    )
+    assert plex_unwatched.status.manually_unwatched
+
+    # Jellyfin: this is the very FIRST time this item is ever observed on
+    # this server (no previous row) - it happens to already be completed,
+    # e.g. long-standing history, not a fresh rewatch.
+    jellyfin_first_seen_completed = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Shows": LibraryData(title="Shows", movies=[jellyfin_first_seen_completed])})},
+        env,
+        "Jellyfin",
+    )
+
+    # The first-observation completed item must NOT override the manual
+    # unwatch just because it happened to be recorded in the same cycle.
+    assert (
+        compare_media_items(plex_unwatched, jellyfin_first_seen_completed, settings_override(), 100.0)
+        == Ord.A_BETTER
+    )
+    assert (
+        compare_media_items(jellyfin_first_seen_completed, plex_unwatched, settings_override(), 100.0)
+        == Ord.B_BETTER
+    )
+
+
+def test_manual_unwatched_detection_ignores_other_source_baseline(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Source Scoped Baseline",
+        locations=("source-scoped-baseline.mkv",),
+        imdb_id="tt7654335",
+    )
+    emby_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=False,
+            time=0,
+            viewed_date=datetime.now(timezone.utc),
+        ),
+    )
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+    db_path = initialize_watched_state_db(env)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO media_state
+            (state_key, completed, resume_ms, viewed_date, manual_unwatched_at,
+             observed_at, state_changed_at)
+            VALUES (?, 1, 0, ?, NULL, ?, ?)
+            """,
+            (
+                mediaitem_state_key(emby_item, "Plex"),
+                emby_item.status.viewed_date.isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[emby_item])})},
+        env,
+        "Emby",
+    )
+
+    assert not emby_item.status.manually_unwatched
+
+
+def test_source_exact_state_precedes_flexible_identity_match(tmp_path):
+    identifiers = MediaIdentifiers(
+        title="Exact Source Item",
+        locations=("exact-source-item.mkv",),
+        imdb_id="tt7654330",
+    )
+    watched_item = MediaItem(
+        identifiers=identifiers,
+        status=WatchedStatus(
+            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+        ),
+    )
+    unwatched_item = watched_item.model_copy(deep=True)
+    unwatched_item.status.completed = False
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[watched_item])})},
+        env,
+        "Plex",
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[watched_item])})},
+        env,
+        "Jellyfin",
+    )
+    apply_manual_unwatched_state(
+        {"user": UserData(libraries={"Movies": LibraryData(title="Movies", movies=[unwatched_item])})},
+        env,
+        "Jellyfin",
+    )
+
+    assert unwatched_item.status.manually_unwatched
+
+
+# def test_mapping_cleanup_watched():
+#    user_watched_list_1 = {
+#        "user1": {
+#            "TV Shows": tv_shows_watched_list_1,
+#            "Movies": movies_watched_list_1,
+#            "Other Shows": tv_shows_2_watched_list_1,
+#        },
+#    }
+#    user_watched_list_2 = {
+#        "user2": {
+#            "Shows": tv_shows_watched_list_2,
+#            "Movies": movies_watched_list_2,
+#            "Other Shows": tv_shows_2_watched_list_1,
+#        }
+#    }
+#
+#    expected_watched_list_1 = {
+#        "user1": {
+#            "TV Shows": expected_tv_show_watched_list_1,
+#            "Movies": expected_movie_watched_list_1,
+#        }
+#    }
+#
+#    expected_watched_list_2 = {
+#        "user2": {
+#            "Shows": expected_tv_show_watched_list_2,
+#            "Movies": expected_movie_watched_list_2,
+#        }
+#    }
+#
+#    user_mapping = {"user1": "user2"}
+#    library_mapping = {"TV Shows": "Shows"}
+#
+#    return_watched_list_1 = cleanup_watched(
+#        user_watched_list_1,
+#        user_watched_list_2,
+#        user_mapping=user_mapping,
+#        library_mapping=library_mapping,
+#    )
+#    return_watched_list_2 = cleanup_watched(
+#        user_watched_list_2,
+#        user_watched_list_1,
+#        user_mapping=user_mapping,
+#        library_mapping=library_mapping,
+#    )
+#
+#    assert return_watched_list_1 == expected_watched_list_1
+#    assert return_watched_list_2 == expected_watched_list_2

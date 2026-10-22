@@ -6,6 +6,7 @@ from loguru import logger
 
 from src.connection import generate_server_connections
 from src.functions import configure_logger
+from src.progress import ProgressLogger
 from src.settings import AppSettings, load_settings
 from src.users import generate_all_server_users
 from src.sync_inventory import fetch_watched_inventory, generate_sync_inventory
@@ -41,7 +42,7 @@ def main_loop(settings: AppSettings, average_time: float) -> None:
     server_user_libraries = generate_sync_inventory(server_users, settings)
     logger.debug("Selected user libraries for {} servers", len(server_user_libraries))
 
-    servers_watched = fetch_watched_inventory(server_user_libraries)
+    servers_watched = fetch_watched_inventory(server_user_libraries, settings)
     logger.debug("Fetched watched data for {} servers", len(servers_watched))
     logger.bind(
         data={
@@ -59,12 +60,39 @@ def main_loop(settings: AppSettings, average_time: float) -> None:
         }
     ).trace("Planned watched updates")
 
+    planned_destinations = set(watched_plan)
+    for server in servers:
+        if server not in planned_destinations:
+            logger.info(
+                "No watched updates planned for [{}]",
+                server.server_settings.name,
+            )
+
     for destination, source_batches in watched_plan.items():
-        logger.info("Applying watched plan to {}", destination.info())
-        for source_name, updates in source_batches.items():
+        logger.info(
+            "Applying watched plan to [{}] {}",
+            destination.server_settings.name,
+            destination.info(),
+        )
+        progress = ProgressLogger(
+            destination.server_settings.name,
+            "Applying source update batches",
+            len(source_batches),
+        )
+        progress.update(0)
+        for batch_index, (source_name, updates) in enumerate(
+            source_batches.items(), start=1
+        ):
+            logger.info(
+                "Applying {} watched updates from [{}] to [{}]",
+                len(updates),
+                source_name,
+                destination.server_settings.name,
+            )
             # For relayed winners this is the final authorized hop; each
             # update's relay_path retains the original source and full route.
             destination.update_watched(updates, source_name)
+            progress.update(batch_index)
 
 
 def main() -> None:

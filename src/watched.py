@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from datetime import datetime
+import json
+import os
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from enum import IntEnum
 from typing import Any, Literal, TypeVar
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from src.functions import normalize_name, to_aware_utc
+from src.functions import get_env_value, normalize_name, to_aware_utc
 from src.settings import AppSettings
 
 
@@ -40,6 +43,15 @@ class WatchedStatus(BaseModel):
     completed: bool
     time: int
     viewed_date: datetime
+    manually_unwatched: bool = False
+    manual_unwatched_at: datetime | None = None
+    # Timestamp of the last time this item's completed/resume state materially
+    # changed for this source server, per the watched-state DB (mirrors the
+    # media_state.state_changed_at column). Used to let a rewatch that
+    # happened AFTER the other server's manual-unwatch timestamp override a
+    # stale manual-unwatched marker, no matter how many cycles have passed
+    # since either event was first recorded.
+    state_changed_at: datetime | None = None
 
 
 class MediaItem(BaseModel):
@@ -194,6 +206,715 @@ def expand_watched_updates(
                     )
     return updates
 
+STATE_ENV: dict[str, Any] = {}
+"""Shared state for the watched-state DB (path from WATCHED_STATE_DB env var,
+per-server in-memory indexes, and the current fetch source)."""
+
+
+def mediaitem_identity_key(item: MediaItem) -> str:
+    return json.dumps(
+        {
+        "title": item.identifiers.title or "",
+        "locations": list(item.identifiers.locations),
+        "imdb_id": item.identifiers.imdb_id or "",
+        "tvdb_id": item.identifiers.tvdb_id or "",
+        "tmdb_id": item.identifiers.tmdb_id or "",
+        },
+        sort_keys=True,
+    )
+
+
+def mediaitem_state_key(item: MediaItem, source_server: str | None = None) -> str:
+    payload = json.loads(mediaitem_identity_key(item))
+    if source_server:
+        payload["source_server"] = source_server
+    return json.dumps(payload, sort_keys=True)
+
+
+def watched_state_db_path(env: dict[str, str | float | None] | None) -> str:
+    db_path = get_env_value(env, "WATCHED_STATE_DB", ".jellyplex-watched-state.db")
+    if not os.path.isabs(db_path):
+        db_path = os.path.join(os.getcwd(), db_path)
+    return db_path
+
+
+def legacy_watched_state_path(env: dict[str, str | float | None] | None) -> str:
+    state_path = get_env_value(env, "WATCHED_STATE_FILE", ".jellyplex-watched-state.json")
+    if not os.path.isabs(state_path):
+        state_path = os.path.join(os.getcwd(), state_path)
+    return state_path
+
+
+def initialize_watched_state_db(
+    env: dict[str, str | float | None] | None,
+) -> str:
+    db_path = watched_state_db_path(env)
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS media_state (
+                state_key TEXT PRIMARY KEY,
+                completed INTEGER NOT NULL,
+                resume_ms INTEGER NOT NULL,
+                viewed_date TEXT NOT NULL,
+                manual_unwatched_at TEXT,
+                observed_at TEXT NOT NULL DEFAULT '',
+                state_changed_at TEXT
+            )
+            """
+        )
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(media_state)").fetchall()
+        }
+        if "observed_at" not in columns:
+            connection.execute(
+                "ALTER TABLE media_state ADD COLUMN observed_at TEXT NOT NULL DEFAULT ''"
+            )
+        if "state_changed_at" not in columns:
+            connection.execute(
+                "ALTER TABLE media_state ADD COLUMN state_changed_at TEXT"
+            )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_sync (
+                state_key TEXT NOT NULL,
+                destination_server TEXT NOT NULL,
+                expected_completed INTEGER NOT NULL,
+                expected_resume_ms INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (state_key, destination_server)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+
+        migrated = connection.execute(
+            "SELECT 1 FROM metadata WHERE key = 'json_migrated'"
+        ).fetchone()
+        legacy_path = legacy_watched_state_path(env)
+        if migrated is None and os.path.exists(legacy_path):
+            try:
+                with open(legacy_path, "r", encoding="utf-8") as state_file:
+                    legacy_state = json.load(state_file)
+                if not isinstance(legacy_state, dict):
+                    raise ValueError("legacy state is not a JSON object")
+
+                for state_key, state in legacy_state.items():
+                    if not isinstance(state, dict):
+                        continue
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO media_state
+                        (state_key, completed, resume_ms, viewed_date, manual_unwatched_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            state_key,
+                            int(bool(state.get("completed", False))),
+                            int(state.get("time", 0)),
+                            str(
+                                state.get(
+                                    "viewed_date",
+                                    datetime.now(timezone.utc).isoformat(),
+                                )
+                            ),
+                            state.get("manual_unwatched_at"),
+                        ),
+                    )
+                logger.info(f"Migrated watched state from {legacy_path} to {db_path}")
+                connection.execute(
+                    "INSERT INTO metadata (key, value) VALUES ('json_migrated', 'true')"
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+                logger.warning(
+                    f"Failed to migrate watched state from {legacy_path}: {error}"
+                )
+
+    return db_path
+
+
+def was_previously_watched(
+    item: MediaItem,
+    env: dict[str, str | float | None],
+) -> bool:
+    state_index = env.get("_watched_state_index")
+    if isinstance(state_index, dict):
+        row = _find_indexed(
+            item, state_index, str(env.get("_watched_state_source", ""))
+        )
+        if (
+            row is None
+            and not item.status.completed
+            and item.status.time <= 60_000
+        ):
+            row = _find_any_indexed(item, state_index)
+        return row is not None
+
+    db_path = initialize_watched_state_db(env)
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT completed FROM media_state WHERE state_key = ?",
+            (mediaitem_state_key(item, str(env.get("_watched_state_source", ""))),),
+        ).fetchone()
+    return row is not None
+
+
+def load_previously_watched_keys(
+    env: dict[str, str | float | None],
+    source_server: str | None,
+) -> set[str]:
+    """Load completed state keys once for a server snapshot."""
+    db_path = initialize_watched_state_db(env)
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT state_key
+            FROM media_state
+            WHERE completed = 1 AND state_key LIKE ?
+            """,
+            (f'%"source_server": "{source_server or ""}"%',),
+        ).fetchall()
+
+    return {row[0] for row in rows}
+
+
+def _identity_values(item: MediaItem) -> tuple[tuple[str, ...], str | None, str | None, str | None, str | None]:
+    identifiers = item.identifiers
+    return (
+        tuple(identifiers.locations),
+        identifiers.imdb_id,
+        identifiers.tvdb_id,
+        identifiers.tmdb_id,
+        identifiers.title,
+    )
+
+
+def load_state_index(
+    env: dict[str, str | float | None],
+    source_server: str | None,
+) -> dict[str, Any]:
+    """Load and normalize all state used during one server snapshot."""
+    db_path = initialize_watched_state_db(env)
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT state_key, completed, resume_ms, state_changed_at,
+                   manual_unwatched_at
+            FROM media_state
+            WHERE state_key LIKE ?
+            """,
+            (f'%"source_server": "{source_server or ""}"%',),
+        ).fetchall()
+        rows += connection.execute(
+            """
+            SELECT state_key, completed, resume_ms, state_changed_at,
+                   manual_unwatched_at
+            FROM media_state
+            WHERE state_key NOT LIKE '%"source_server":%'
+            """
+        ).fetchall()
+        rows += connection.execute(
+            """
+            SELECT state_key, completed, resume_ms, state_changed_at,
+                   manual_unwatched_at
+            FROM media_state
+            WHERE state_key LIKE '%"source_server":%'
+              AND state_key NOT LIKE ?
+            """,
+            (f'%"source_server": "{source_server or ""}"%',),
+        ).fetchall()
+        pending_ttl_hours = float(
+            get_env_value(env, "WATCHED_STATE_PENDING_TTL_HOURS", "24") or 24
+        )
+        pending_cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=pending_ttl_hours)
+        ).isoformat()
+        pending_rows = connection.execute(
+            """
+            SELECT state_key, expected_completed, expected_resume_ms
+            FROM pending_sync
+            WHERE destination_server = ? AND created_at >= ?
+            """,
+            (source_server or "", pending_cutoff),
+        ).fetchall()
+
+    index: dict[str, Any] = {
+        "by_state_key": {},
+        "by_location": {},
+        "by_imdb_id": {},
+        "by_tvdb_id": {},
+        "by_tmdb_id": {},
+        "by_title": {},
+        "by_any_state_key": {},
+        "by_any_location": {},
+        "by_any_imdb_id": {},
+        "by_any_tvdb_id": {},
+        "by_any_tmdb_id": {},
+        "by_any_title": {},
+        "pending": {},
+    }
+    source_rows = rows[:]
+    for row in source_rows:
+        try:
+            identity = json.loads(row[0])
+        except json.JSONDecodeError:
+            continue
+        normalized = (row, identity)
+        is_current_source = (
+            f'"source_server": "{source_server or ""}"' in row[0]
+            or '"source_server":' not in row[0]
+        )
+        state_key_name = "by_state_key" if is_current_source else "by_any_state_key"
+        location_name = "by_location" if is_current_source else "by_any_location"
+        index[state_key_name].setdefault(row[0], normalized)
+        for location in identity.get("locations", []):
+            index[location_name].setdefault(location, normalized)
+        for field, index_name in (
+            ("imdb_id", "by_imdb_id"),
+            ("tvdb_id", "by_tvdb_id"),
+            ("tmdb_id", "by_tmdb_id"),
+            ("title", "by_title"),
+        ):
+            value = identity.get(field)
+            if value:
+                index[
+                    index_name if is_current_source else f"by_any_{field}"
+                ].setdefault(value, normalized)
+
+    for row in pending_rows:
+        try:
+            identity = json.loads(row[0])
+        except json.JSONDecodeError:
+            continue
+        normalized = (row, identity)
+        for location in identity.get("locations", []):
+            index["pending"].setdefault(("location", location), normalized)
+        for field in ("imdb_id", "tvdb_id", "tmdb_id", "title"):
+            value = identity.get(field)
+            if value:
+                index["pending"].setdefault((field, value), normalized)
+    return index
+
+
+def _find_indexed(
+    item: MediaItem,
+    index: dict[str, Any],
+    source_server: str | None = None,
+) -> tuple | None:
+    exact_key = mediaitem_state_key(item, source_server)
+    if exact_key in index["by_state_key"]:
+        return index["by_state_key"][exact_key][0]
+
+    locations, imdb_id, tvdb_id, tmdb_id, title = _identity_values(item)
+    for location in locations:
+        if location in index["by_location"]:
+            return index["by_location"][location][0]
+    for field, value in (
+        ("imdb_id", imdb_id),
+        ("tvdb_id", tvdb_id),
+        ("tmdb_id", tmdb_id),
+        ("title", title),
+    ):
+        if value and value in index[f"by_{field}"]:
+            return index[f"by_{field}"][value][0]
+    return None
+
+
+def _find_any_indexed(
+    item: MediaItem,
+    index: dict[str, Any],
+) -> tuple | None:
+    locations, imdb_id, tvdb_id, tmdb_id, title = _identity_values(item)
+    for location in locations:
+        if location in index["by_any_location"]:
+            row = index["by_any_location"][location][0]
+            if bool(row[1]):
+                return row
+    for field, value in (
+        ("imdb_id", imdb_id),
+        ("tvdb_id", tvdb_id),
+        ("tmdb_id", tmdb_id),
+        ("title", title),
+    ):
+        if value and value in index[f"by_any_{field}"]:
+            row = index[f"by_any_{field}"][value][0]
+            if bool(row[1]):
+                return row
+    return None
+
+
+def _index_state_row(
+    state_index: dict[str, Any],
+    row: tuple,
+) -> None:
+    """Add the latest persisted state row to the in-memory lookup index."""
+    try:
+        identity = json.loads(row[0])
+    except (TypeError, json.JSONDecodeError):
+        return
+
+    normalized = (row, identity)
+    state_index["by_state_key"][row[0]] = normalized
+    for location in identity.get("locations", []):
+        state_index["by_location"][location] = normalized
+    for field, index_name in (
+        ("imdb_id", "by_imdb_id"),
+        ("tvdb_id", "by_tvdb_id"),
+        ("tmdb_id", "by_tmdb_id"),
+        ("title", "by_title"),
+    ):
+        value = identity.get(field)
+        if value:
+            state_index[index_name][value] = normalized
+
+
+def _find_state_row(
+    connection: sqlite3.Connection,
+    item: MediaItem,
+    source_server: str | None,
+    state_index: dict[str, Any] | None = None,
+) -> tuple | None:
+    if state_index is not None:
+        exact_key = mediaitem_state_key(item, source_server)
+        exact = state_index.get("by_state_key", {}).get(exact_key)
+        if exact is not None:
+            return exact[0]
+
+    rows = connection.execute(
+        """
+        SELECT state_key, completed, resume_ms, state_changed_at,
+               manual_unwatched_at
+        FROM media_state
+        WHERE state_key LIKE ?
+        """,
+        (f'%"source_server": "{source_server or ""}"%',),
+    ).fetchall()
+    rows += connection.execute(
+        """
+        SELECT state_key, completed, resume_ms, state_changed_at,
+               manual_unwatched_at
+        FROM media_state
+        WHERE state_key NOT LIKE '%"source_server":%'
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            identity = json.loads(row[0])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        stored_source = identity.get("source_server")
+        if stored_source not in (None, source_server):
+            continue
+        if _identities_match(item, identity):
+            return row
+    return None
+
+
+def _identities_match(item: MediaItem, stored_identity: dict[str, Any]) -> bool:
+    if set(item.identifiers.locations).intersection(
+        stored_identity.get("locations", [])
+    ):
+        return True
+    for field in ("imdb_id", "tvdb_id", "tmdb_id"):
+        value = getattr(item.identifiers, field)
+        if value and value == stored_identity.get(field):
+            return True
+    return item.identifiers.title == stored_identity.get("title")
+
+
+def _find_pending(index: dict[str, Any], item: MediaItem) -> tuple | None:
+    locations, imdb_id, tvdb_id, tmdb_id, title = _identity_values(item)
+    for key in [(("location", value)) for value in locations] + [
+        ("imdb_id", imdb_id),
+        ("tvdb_id", tvdb_id),
+        ("tmdb_id", tmdb_id),
+        ("title", title),
+    ]:
+        if key[1] and key in index["pending"]:
+            return index["pending"][key][0]
+    return None
+
+
+def _remove_pending_from_index(
+    state_index: dict[str, Any] | None,
+    pending_key: str,
+) -> None:
+    if not state_index:
+        return
+    for key_name, value in list(state_index["pending"].items()):
+        if value[0][0] == pending_key:
+            del state_index["pending"][key_name]
+
+
+def _apply_manual_unwatched_item_state_db(
+    connection: sqlite3.Connection,
+    item: MediaItem,
+    source_server: str | None,
+    state_index: dict[str, Any] | None = None,
+) -> None:
+    key = mediaitem_state_key(item, source_server)
+    previous = _find_state_row(connection, item, source_server, state_index)
+    state_key = previous[0] if previous else key
+    now = datetime.now(timezone.utc)
+    manual_unwatched_at = None
+    pending = _find_pending(state_index, item) if state_index else None
+    pending_key = pending[0] if pending else None
+    if pending:
+        pending = pending[1:]
+    pending_matches = bool(
+        pending
+        and bool(pending[0]) == item.status.completed
+        and abs(pending[1] - item.status.time) <= 10_000
+    )
+
+    if (
+        previous
+        and previous[4]
+        and not item.status.completed
+        and item.status.time <= 10_000
+        and not pending_matches
+    ):
+        # Re-affirming an already-established manual-unwatched state. Preserve
+        # the ORIGINAL detection timestamp rather than bumping it to `now` -
+        # otherwise this marker's effective timestamp would advance forever
+        # on every cycle it stays unwatched, making it perpetually "newer"
+        # than any rewatch on the other server and permanently defeating the
+        # state_changed_at-based override below.
+        item.status.time = 0
+        item.status.manually_unwatched = True
+        item.status.manual_unwatched_at = datetime.fromisoformat(previous[4])
+
+    if (
+        previous
+        and bool(previous[1])
+        and not item.status.completed
+        and item.status.time <= 10_000
+        and not pending_matches
+    ):
+        item.status.viewed_date = now
+        item.status.time = 0
+        item.status.manually_unwatched = True
+        item.status.manual_unwatched_at = now
+        manual_unwatched_at = now.isoformat()
+    elif item.status.manually_unwatched:
+        manual_unwatched_at = previous[4] if previous else now.isoformat()
+
+    # On the very first observation of this item (no previous DB row), we
+    # have no evidence of WHEN its current completed/time state actually
+    # arose - it could be old, pre-existing history, not a fresh change.
+    # Treating a first observation as "changed now" would let a
+    # long-completed item on one server spuriously "postdate" (and thus
+    # override) a manual-unwatched marker recorded moments earlier on the
+    # other server in the very same cycle. Record state_changed_at as
+    # unknown (None) instead so first observations can never trigger the
+    # rewatch-overrides-stale-unwatch logic below.
+    state_changed_at = (
+        None
+        if not previous
+        else (
+            now.isoformat()
+            if bool(previous[1]) != item.status.completed
+            or abs(previous[2] - item.status.time) > 10_000
+            else previous[3]
+        )
+    )
+    item.status.state_changed_at = (
+        datetime.fromisoformat(state_changed_at) if state_changed_at else None
+    )
+    connection.execute(
+        """
+        INSERT INTO media_state
+        (state_key, completed, resume_ms, viewed_date, manual_unwatched_at,
+         observed_at, state_changed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(state_key) DO UPDATE SET
+            completed = excluded.completed,
+            resume_ms = excluded.resume_ms,
+            viewed_date = excluded.viewed_date,
+            manual_unwatched_at = excluded.manual_unwatched_at,
+            observed_at = excluded.observed_at,
+            state_changed_at = excluded.state_changed_at
+        """,
+        (
+            state_key,
+            int(item.status.completed),
+            item.status.time,
+            item.status.viewed_date.isoformat(),
+            manual_unwatched_at,
+            now.isoformat(),
+            state_changed_at,
+        ),
+    )
+    if state_index is not None:
+        _index_state_row(
+            state_index,
+            (
+                state_key,
+                int(item.status.completed),
+                item.status.time,
+                state_changed_at,
+                manual_unwatched_at,
+            ),
+        )
+    if pending:
+        pending_state_key = pending_key or mediaitem_identity_key(item)
+        connection.execute(
+            """
+            DELETE FROM pending_sync
+            WHERE state_key = ? AND destination_server = ?
+            """,
+            (pending_state_key, source_server or ""),
+        )
+        _remove_pending_from_index(state_index, pending_state_key)
+
+
+def record_pending_sync(
+    env: dict[str, str | float | None],
+    item: MediaItem,
+    destination_server: str,
+    destination_item: MediaItem | None = None,
+) -> None:
+    """Record a state written by this process for destination confirmation."""
+    env["_watched_state_dirty"] = True
+    db_path = initialize_watched_state_db(env)
+    identity_key = mediaitem_identity_key(destination_item or item)
+    expected = (
+        identity_key,
+        int(item.status.completed),
+        item.status.time,
+    )
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    # The destination server's own media_state baseline is otherwise only
+    # ever updated by READING that server on a later cycle - never by this
+    # process's own writes. If the destination's real state is changed again
+    # (e.g. the user manually unwatches it) before that next read happens,
+    # the stale baseline (still showing the pre-write value) makes the
+    # subsequent read look unchanged, so the manual transition is silently
+    # missed. Proactively record what we just wrote as the destination's new
+    # baseline so a later divergent read is correctly recognized as a fresh
+    # manual change.
+    destination_state_key = mediaitem_state_key(
+        destination_item or item, destination_server
+    )
+    destination_index = (
+        env.get("_watched_state_indexes", {}).get(destination_server)
+        if isinstance(env.get("_watched_state_indexes"), dict)
+        else env.get("_watched_state_index")
+    )
+    manual_unwatched_at = (
+        item.status.manual_unwatched_at.isoformat()
+        if item.status.manually_unwatched and item.status.manual_unwatched_at
+        else None
+    )
+    with sqlite3.connect(db_path) as connection:
+        # Reuse the row the destination's own reads resolve to (matched by
+        # location/ids/title) so the baseline is updated in place instead of
+        # creating an orphan row under the source item's identity key.
+        existing = _find_state_row(
+            connection,
+            destination_item or item,
+            destination_server,
+            destination_index if isinstance(destination_index, dict) else None,
+        )
+        if existing:
+            destination_state_key = existing[0]
+        connection.execute(
+            """
+            INSERT INTO pending_sync
+            (state_key, destination_server, expected_completed,
+             expected_resume_ms, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(state_key, destination_server) DO UPDATE SET
+                expected_completed = excluded.expected_completed,
+                expected_resume_ms = excluded.expected_resume_ms,
+                created_at = excluded.created_at
+            """,
+            (
+                identity_key,
+                destination_server,
+                int(item.status.completed),
+                item.status.time,
+                now_iso,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO media_state
+            (state_key, completed, resume_ms, viewed_date, manual_unwatched_at,
+             observed_at, state_changed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(state_key) DO UPDATE SET
+                completed = excluded.completed,
+                resume_ms = excluded.resume_ms,
+                viewed_date = excluded.viewed_date,
+                manual_unwatched_at = excluded.manual_unwatched_at,
+                observed_at = excluded.observed_at,
+                state_changed_at = excluded.state_changed_at
+            """,
+            (
+                destination_state_key,
+                int(item.status.completed),
+                item.status.time,
+                item.status.viewed_date.isoformat(),
+                manual_unwatched_at,
+                now_iso,
+                now_iso,
+            ),
+        )
+    state_indexes = env.get("_watched_state_indexes")
+    state_index = (
+        state_indexes.get(destination_server)
+        if isinstance(state_indexes, dict)
+        else env.get("_watched_state_index")
+    )
+    if isinstance(state_index, dict):
+        normalized = ((identity_key, expected[1], expected[2]), json.loads(identity_key))
+        identity = normalized[1]
+        for location in identity.get("locations", []):
+            state_index["pending"][("location", location)] = normalized
+        for field in ("imdb_id", "tvdb_id", "tmdb_id", "title"):
+            value = identity.get(field)
+            if value:
+                state_index["pending"][(field, value)] = normalized
+
+
+def apply_manual_unwatched_state(
+    watched_list: dict[str, UserData],
+    env: dict[str, str | float | None],
+    source_server: str | None = None,
+) -> dict[str, UserData]:
+    db_path = initialize_watched_state_db(env)
+    state_index = env.get("_watched_state_index")
+    if not isinstance(state_index, dict):
+        state_index = load_state_index(env, source_server)
+
+    with sqlite3.connect(db_path) as connection:
+        for user_data in watched_list.values():
+            for library_data in user_data.libraries.values():
+                for movie in library_data.movies:
+                    _apply_manual_unwatched_item_state_db(
+                        connection, movie, source_server, state_index
+                    )
+
+                for series in library_data.series:
+                    for episode in series.episodes:
+                        _apply_manual_unwatched_item_state_db(
+                            connection, episode, source_server, state_index
+                        )
+
+    return watched_list
+
 
 def compare_media_items(
     media1: MediaItem,
@@ -211,6 +932,50 @@ def compare_media_items(
         to_aware_utc(media1.status.viewed_date),
         to_aware_utc(media2.status.viewed_date),
     )
+
+    # A manual unwatched transition is an explicit user action and must win
+    # over stale watched or partial-progress state. A watched state restored
+    # by the user is propagated through pending_sync and is not marked as a
+    # manual-unwatched transition, so it can still become the new baseline.
+    # Exception: if the other (not manually-unwatched) item became completed
+    # on its own server AFTER the manual-unwatch happened (comparing the
+    # persisted state_changed_at/manual_unwatched_at timestamps, not a
+    # transient single-cycle flag), that's a fresh, deliberate rewatch that
+    # postdates the unwatch action and must be allowed to override the stale
+    # manual-unwatched marker rather than being silently reverted forever.
+    if media1.status.manually_unwatched != media2.status.manually_unwatched:
+        unwatched_media = media1 if media1.status.manually_unwatched else media2
+        other_media = media2 if media1.status.manually_unwatched else media1
+        other_state_changed_at = to_aware_utc(other_media.status.state_changed_at)
+        unwatched_manual_unwatched_at = to_aware_utc(
+            unwatched_media.status.manual_unwatched_at
+        )
+        rewatch_overrides = bool(
+            other_media.status.completed
+            and other_state_changed_at is not None
+            and unwatched_manual_unwatched_at is not None
+            and other_state_changed_at > unwatched_manual_unwatched_at
+        )
+        logger.trace(
+            "Manual-unwatched priority check: "
+            f"other.completed={other_media.status.completed}, "
+            f"other.state_changed_at={other_state_changed_at}, "
+            f"unwatched.manual_unwatched_at={unwatched_manual_unwatched_at}, "
+            f"rewatch_overrides={rewatch_overrides}"
+        )
+        if not rewatch_overrides:
+            return (
+                Ord.A_BETTER
+                if media1.status.manually_unwatched
+                else Ord.B_BETTER
+            )
+
+    # An unknown incomplete item may have a newly generated viewed date.
+    # Completion must take priority unless the item is explicitly manually unwatched.
+    if media1.status.completed != media2.status.completed:
+        incomplete = media2 if media1.status.completed else media1
+        if incomplete.status.time == 0:
+            return Ord.A_BETTER if media1.status.completed else Ord.B_BETTER
 
     # If both are completed, it's a tie.
     if media1.status.completed and media2.status.completed:
@@ -599,6 +1364,34 @@ def check_remove_entry(
     """
     if not check_same_identifiers(item1.identifiers, item2.identifiers):
         return False
+
+    # Services commonly return never-played items as incomplete with a
+    # synthetic current timestamp. Without an explicit manual-unwatched
+    # transition, that observation must not remove a real watched or partial
+    # state from the other server.
+    if (
+        not item2.status.completed
+        and item2.status.manual_unwatched_at is None
+        and item2.status.time == 0
+    ):
+        return False
+
+    # A fresh zero-progress observation is not an authoritative state. If
+    # item2 has meaningful progress, remove the unknown item1 candidate
+    # instead of letting its synthetic current timestamp win the comparison.
+    if (
+        not item1.status.completed
+        and item1.status.manual_unwatched_at is None
+        and item1.status.time == 0
+        and (item2.status.completed or item2.status.time > 0)
+    ):
+        logger.trace(
+            "check_remove_entry: treating item1 as unknown/never-played "
+            f"(no manual_unwatched_at) and removing it in favor of item2. "
+            f"item1='{item1.identifiers}' (completed={item1.status.completed}, time={item1.status.time}, manual_unwatched_at={item1.status.manual_unwatched_at}), "
+            f"item2='{item2.identifiers}' (completed={item2.status.completed}, time={item2.status.time})"
+        )
+        return True
 
     # Removal policy for cleanup: drop item1 if item2 is as-good-or-better.
     return compare_media_items(item1, item2, settings, average_time) in (
