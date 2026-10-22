@@ -3,5 +3,6 @@
         "editor.formatOnSave": true,
     },
     "python.formatting.provider": "black",
+    "python-envs.defaultEnvManager": "ms-python.python:system",
     
 }

@@ -278,6 +278,7 @@ class PlexSettings(_ServerBase[str | None]):
         description="Required for token authentication; optional for account discovery.",
     )
     token: SecretStr | None = None
+    account_token: SecretStr | None = None
     username: str | None = None
     password: SecretStr | None = None
     servername: str | None = None
