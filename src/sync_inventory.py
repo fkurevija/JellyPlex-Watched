@@ -22,6 +22,13 @@ from src.watched import (
 )
 
 type Server = Plex | Jellyfin | Emby
+
+
+def _state_source_name(server) -> str:
+    # Distinct per configured server, so two Plex servers keep separate baselines.
+    settings = getattr(server, "server_settings", None)
+    return getattr(settings, "name", None) or type(server).__name__
+
 type ServerUser = MyPlexAccount | MyPlexUser | tuple[str, str]
 
 
@@ -63,7 +70,7 @@ def generate_sync_inventory(
                 logger.warning(
                     "Skipping library discovery for user {} on {} ({})",
                     UserLibraries(user, {}).username,
-                    server.server_settings.name,
+                    _state_source_name(server),
                     type(error).__name__,
                 )
                 continue
@@ -81,7 +88,7 @@ def generate_sync_inventory(
                     "Could not get library sizes for {} on {} ({}); "
                     "catalog scoping will be unavailable for those libraries",
                     UserLibraries(user, {}).username,
-                    server.server_settings.name,
+                    _state_source_name(server),
                     type(error).__name__,
                 )
                 sizes = {}
@@ -229,7 +236,7 @@ def fetch_watched_inventory(
     if settings is not None:
         groups: dict[tuple[str, str], list[tuple[Server, UserLibraries, str]]] = {}
         for server, entries in inventory.items():
-            server_name = server.server_settings.name
+            server_name = _state_source_name(server)
             for entry in entries:
                 canonical_user = settings.lookup_user(server_name, entry.username)
                 user_key = (
@@ -336,9 +343,9 @@ def fetch_watched_inventory(
         # Adapters consult the persisted state while reading so previously
         # watched items that now read as unwatched are retained.
         state_indexes = STATE_ENV.setdefault("_watched_state_indexes", {})
-        state_index = load_state_index(STATE_ENV, type(server).__name__)
-        state_indexes[type(server).__name__] = state_index
-        STATE_ENV["_watched_state_source"] = type(server).__name__
+        state_index = load_state_index(STATE_ENV, _state_source_name(server))
+        state_indexes[_state_source_name(server)] = state_index
+        STATE_ENV["_watched_state_source"] = _state_source_name(server)
         STATE_ENV["_watched_state_index"] = state_index
         for entry in entries:
             if not entry.libraries:
@@ -415,9 +422,9 @@ def fetch_watched_inventory(
                     }
                 }
             )
-        STATE_ENV["_watched_state_source"] = type(server).__name__
+        STATE_ENV["_watched_state_source"] = _state_source_name(server)
         STATE_ENV["_watched_state_index"] = state_index
         servers_watched[server] = apply_manual_unwatched_state(
-            watched, STATE_ENV, type(server).__name__
+            watched, STATE_ENV, _state_source_name(server)
         )
     return servers_watched

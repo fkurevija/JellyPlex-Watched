@@ -1103,7 +1103,7 @@ class JellyfinEmby:
                                     record_pending_sync(
                                         self.env,
                                         stored_movie,
-                                        self.server_type,
+                                        self.server_settings.name,
                                         MediaItem(
                                             identifiers=jelly_identifiers,
                                             status=stored_movie.status,
@@ -1176,7 +1176,7 @@ class JellyfinEmby:
                                     record_pending_sync(
                                         self.env,
                                         stored_movie,
-                                        self.server_type,
+                                        self.server_settings.name,
                                         MediaItem(
                                             identifiers=jelly_identifiers,
                                             status=stored_movie.status,
@@ -1243,7 +1243,7 @@ class JellyfinEmby:
                                     record_pending_sync(
                                         self.env,
                                         stored_movie,
-                                        self.server_type,
+                                        self.server_settings.name,
                                         MediaItem(
                                             identifiers=jelly_identifiers,
                                             status=stored_movie.status,
@@ -1427,7 +1427,7 @@ class JellyfinEmby:
                                             record_pending_sync(
                                                 self.env,
                                                 stored_ep,
-                                                self.server_type,
+                                                self.server_settings.name,
                                                 MediaItem(
                                                     identifiers=jellyfin_episode_identifiers,
                                                     status=stored_ep.status,
@@ -1512,7 +1512,7 @@ class JellyfinEmby:
                                             record_pending_sync(
                                                 self.env,
                                                 stored_ep,
-                                                self.server_type,
+                                                self.server_settings.name,
                                                 MediaItem(
                                                     identifiers=jellyfin_episode_identifiers,
                                                     status=stored_ep.status,
@@ -1590,7 +1590,7 @@ class JellyfinEmby:
                                             record_pending_sync(
                                                 self.env,
                                                 stored_ep,
-                                                self.server_type,
+                                                self.server_settings.name,
                                                 MediaItem(
                                                     identifiers=jellyfin_episode_identifiers,
                                                     status=stored_ep.status,

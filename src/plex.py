@@ -885,7 +885,7 @@ class Plex:
                                     record_pending_sync(
                                         self.env,
                                         stored_movie,
-                                        "Plex",
+                                        self.server_settings.name,
                                         MediaItem(
                                             identifiers=plex_identifiers,
                                             status=stored_movie.status,
@@ -947,7 +947,7 @@ class Plex:
                                     record_pending_sync(
                                         self.env,
                                         stored_movie,
-                                        "Plex",
+                                        self.server_settings.name,
                                         MediaItem(
                                             identifiers=plex_identifiers,
                                             status=stored_movie.status,
@@ -999,7 +999,7 @@ class Plex:
                                     record_pending_sync(
                                         self.env,
                                         stored_movie,
-                                        "Plex",
+                                        self.server_settings.name,
                                         MediaItem(
                                             identifiers=plex_identifiers,
                                             status=stored_movie.status,
@@ -1133,7 +1133,7 @@ class Plex:
                                                 record_pending_sync(
                                                     self.env,
                                                     stored_ep,
-                                                    "Plex",
+                                                    self.server_settings.name,
                                                     MediaItem(
                                                         identifiers=plex_episode_identifiers,
                                                         status=stored_ep.status,
@@ -1200,7 +1200,7 @@ class Plex:
                                                 record_pending_sync(
                                                     self.env,
                                                     stored_ep,
-                                                    "Plex",
+                                                    self.server_settings.name,
                                                     MediaItem(
                                                         identifiers=plex_episode_identifiers,
                                                         status=stored_ep.status,
@@ -1259,7 +1259,7 @@ class Plex:
                                                 record_pending_sync(
                                                     self.env,
                                                     stored_ep,
-                                                    "Plex",
+                                                    self.server_settings.name,
                                                     MediaItem(
                                                         identifiers=plex_episode_identifiers,
                                                         status=stored_ep.status,
