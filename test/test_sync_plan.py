@@ -434,20 +434,20 @@ def test_missing_destinations_are_unknown_but_empty_libraries_are_valid():
 def test_unwatched_catalog_baseline_contributes_target_identifiers_only():
     settings = settings_override(
         plex=[
-            dict(
-                name="plex-main",
-                baseurl="http://plex",
-                token="x",
-                sync_to=["jellyfin-main"],
-            )
+            {
+                "name": "plex-main",
+                "baseurl": "http://plex",
+                "token": "x",
+                "sync_to": ["jellyfin-main"],
+            }
         ],
         jellyfin=[
-            dict(
-                name="jellyfin-main",
-                baseurl="http://jellyfin",
-                token="x",
-                sync_to=["plex-main"],
-            )
+            {
+                "name": "jellyfin-main",
+                "baseurl": "http://jellyfin",
+                "token": "x",
+                "sync_to": ["plex-main"],
+            }
         ],
     )
     plex = object.__new__(Plex)
@@ -491,20 +491,20 @@ def test_unwatched_catalog_baseline_contributes_target_identifiers_only():
 def test_unwatched_catalog_source_does_not_generate_updates():
     settings = settings_override(
         plex=[
-            dict(
-                name="plex-main",
-                baseurl="http://plex",
-                token="x",
-                sync_to=["jellyfin-main"],
-            )
+            {
+                "name": "plex-main",
+                "baseurl": "http://plex",
+                "token": "x",
+                "sync_to": ["jellyfin-main"],
+            }
         ],
         jellyfin=[
-            dict(
-                name="jellyfin-main",
-                baseurl="http://jellyfin",
-                token="x",
-                sync_to=[],
-            )
+            {
+                "name": "jellyfin-main",
+                "baseurl": "http://jellyfin",
+                "token": "x",
+                "sync_to": [],
+            }
         ],
     )
     plex = object.__new__(Plex)

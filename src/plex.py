@@ -20,21 +20,21 @@ from src.functions import (
 from src.progress import ProgressLogger
 from src.settings import AppSettings, PlexSettings
 from src.watched import (
+    STATE_ENV,
     LibraryData,
     MediaIdentifiers,
     MediaItem,
     Series,
     UserData,
     WatchedStatus,
-    check_same_identifiers,
-    expand_watched_updates,
     WatchedUpdate,
     WatchedWriteOutcome,
     WriteOutcomeStatus,
-    resulting_media_item,
+    check_same_identifiers,
+    expand_watched_updates,
     record_pending_sync,
+    resulting_media_item,
     was_previously_watched,
-    STATE_ENV,
 )
 
 
@@ -77,25 +77,23 @@ def extract_identifiers_from_item(
     locations = (
         tuple([filename_from_any_path(loc) for loc in item.locations])
         if generate_locations
-        else tuple()
+        else ()
     )
 
-    if generate_guids:
-        if not guids:
-            location_text = (
-                f", locations: {' '.join(item.locations)}"
-                if generate_locations
-                else ""
-            )
-            logger.debug(
-                f"Plex: {item.title} has no guids{location_text}",
-            )
+    if generate_guids and not guids:
+        location_text = (
+            f", locations: {' '.join(item.locations)}"
+            if generate_locations
+            else ""
+        )
+        logger.debug(
+            f"Plex: {item.title} has no guids{location_text}",
+        )
 
-    if generate_locations:
-        if not locations:
-            logger.debug(
-                f"Plex: {item.title} has no locations{f', guids: {guids}' if generate_guids else ''}",
-            )
+    if generate_locations and not locations:
+        logger.debug(
+            f"Plex: {item.title} has no locations{f', guids: {guids}' if generate_guids else ''}",
+        )
 
     return MediaIdentifiers(
         title=item.title,
@@ -392,7 +390,7 @@ class Plex:
                                             ]
                                         )
                                         if self.app_settings.generate_locations
-                                        else tuple()
+                                        else ()
                                     ),
                                     imdb_id=show_guids.get("imdb"),
                                     tvdb_id=show_guids.get("tvdb"),
@@ -405,7 +403,7 @@ class Plex:
 
             return watched
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(
                 "Plex [{}]: Failed to get watched for {} in library {}: {}",
                 self.server_settings.name,
@@ -493,7 +491,7 @@ class Plex:
                 user_name,
             )
             return catalog
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             logger.error(
                 "Plex [{}]: Failed to build catalog for {} in library {} ({})",
                 self.server_settings.name,
@@ -662,7 +660,7 @@ class Plex:
                                                 for location in show.locations
                                             )
                                             if self.app_settings.generate_locations
-                                            else tuple()
+                                            else ()
                                         ),
                                         imdb_id=show_guids.get("imdb"),
                                         tvdb_id=show_guids.get("tvdb"),
@@ -684,7 +682,7 @@ class Plex:
                     progress.update(index)
 
             return watched
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             logger.error(
                 "Plex [{}]: Failed catalog-scoped watched fetch for {} in "
                 "library {} ({})",
@@ -764,7 +762,7 @@ class Plex:
                     users_watched[user_name].libraries[library.title] = library_data
 
             return users_watched
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Plex: Failed to get users watched, Error: {e}")
             return {}
 
@@ -847,7 +845,7 @@ class Plex:
             # Search for Plex movies that are currently marked as unwatched.
             try:
                 plex_movies = library_section.search()
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 logger.error(
                     f"Plex: Failed to find movies for {user.title} in {library_name}, Error: {error}"
                 )
@@ -894,7 +892,7 @@ class Plex:
                                             status=stored_movie.status,
                                         ),
                                     )
-                                except Exception as e:
+                                except Exception as e:  # noqa: BLE001
                                     logger.error(
                                         f"Plex: Failed to mark {plex_movie.title} as watched, Error: {e}"
                                     )
@@ -956,7 +954,7 @@ class Plex:
                                             status=stored_movie.status,
                                         ),
                                     )
-                                except Exception as e:
+                                except Exception as e:  # noqa: BLE001
                                     logger.error(
                                         f"Plex: Failed to mark {plex_movie.title} as unwatched, Error: {e}"
                                     )
@@ -1008,7 +1006,7 @@ class Plex:
                                             status=stored_movie.status,
                                         ),
                                     )
-                                except Exception as e:
+                                except Exception as e:  # noqa: BLE001
                                     logger.error(
                                         f"Plex: Failed to update {plex_movie.title} timeline, Error: {e}"
                                     )
@@ -1051,7 +1049,7 @@ class Plex:
             # For each Plex show in the library section:
             try:
                 plex_shows = library_section.search()
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 logger.error(
                     f"Plex: Failed to find shows for {user.title} in {library_name}, Error: {error}"
                 )
@@ -1083,7 +1081,7 @@ class Plex:
                         # Get the list of Plex episodes for this show.
                         try:
                             plex_episodes = plex_show.episodes()
-                        except Exception as error:
+                        except Exception as error:  # noqa: BLE001
                             logger.error(
                                 f"Plex: Failed to find episodes for {user.title} in {library_name} {plex_show.title}, Error: {error}"
                             )
@@ -1142,7 +1140,7 @@ class Plex:
                                                         status=stored_ep.status,
                                                     ),
                                                 )
-                                            except Exception as e:
+                                            except Exception as e:  # noqa: BLE001
                                                 logger.error(
                                                     f"Plex: Failed to mark {plex_show.title} {plex_episode.title} as watched, Error: {e}"
                                                 )
@@ -1209,7 +1207,7 @@ class Plex:
                                                         status=stored_ep.status,
                                                     ),
                                                 )
-                                            except Exception as e:
+                                            except Exception as e:  # noqa: BLE001
                                                 logger.error(
                                                     f"Plex: Failed to mark {plex_show.title} {plex_episode.title} as unwatched, Error: {e}"
                                                 )
@@ -1268,7 +1266,7 @@ class Plex:
                                                         status=stored_ep.status,
                                                     ),
                                                 )
-                                            except Exception as e:
+                                            except Exception as e:  # noqa: BLE001
                                                 logger.error(
                                                     f"Plex: Failed to update {plex_show.title} {plex_episode.title} timeline, Error: {e}"
                                                 )
@@ -1499,7 +1497,7 @@ class Plex:
                         if outcomes:
                             write_outcomes.extend(outcomes)
 
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.error(
                             "Plex [{}]: Failed to update watched for {} in {}: {}",
                             self.server_settings.name,

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
 import json
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import IntEnum
 from typing import Any, Literal
 
@@ -304,7 +304,7 @@ def initialize_watched_state_db(
                 with open(legacy_path, "r", encoding="utf-8") as state_file:
                     legacy_state = json.load(state_file)
                 if not isinstance(legacy_state, dict):
-                    raise ValueError("legacy state is not a JSON object")
+                    raise TypeError("legacy state is not a JSON object")
 
                 for state_key, state in legacy_state.items():
                     if not isinstance(state, dict):
@@ -322,7 +322,7 @@ def initialize_watched_state_db(
                             str(
                                 state.get(
                                     "viewed_date",
-                                    datetime.now(timezone.utc).isoformat(),
+                                    datetime.now(UTC).isoformat(),
                                 )
                             ),
                             state.get("manual_unwatched_at"),
@@ -434,7 +434,7 @@ def load_state_index(
             get_env_value(env, "WATCHED_STATE_PENDING_TTL_HOURS", "24") or 24
         )
         pending_cutoff = (
-            datetime.now(timezone.utc) - timedelta(hours=pending_ttl_hours)
+            datetime.now(UTC) - timedelta(hours=pending_ttl_hours)
         ).isoformat()
         pending_rows = connection.execute(
             """
@@ -662,7 +662,7 @@ def _apply_manual_unwatched_item_state_db(
     key = mediaitem_state_key(item, source_server)
     previous = _find_state_row(connection, item, source_server, state_index)
     state_key = previous[0] if previous else key
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     manual_unwatched_at = None
     pending = _find_pending(state_index, item) if state_index else None
     pending_key = pending[0] if pending else None
@@ -790,7 +790,7 @@ def record_pending_sync(
         int(item.status.completed),
         item.status.time,
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     # The destination server's own media_state baseline is otherwise only
     # ever updated by READING that server on a later cycle - never by this

@@ -9,7 +9,6 @@ from typing import Any, Literal
 from urllib.parse import urlencode
 
 import requests
-
 from loguru import logger
 from packaging.version import Version, parse
 
@@ -21,6 +20,7 @@ from src.functions import (
 from src.progress import ProgressLogger
 from src.settings import AppSettings, EmbySettings, JellyfinSettings
 from src.watched import (
+    STATE_ENV,
     LibraryData,
     MediaIdentifiers,
     MediaItem,
@@ -32,10 +32,9 @@ from src.watched import (
     WriteOutcomeStatus,
     check_same_identifiers,
     expand_watched_updates,
-    resulting_media_item,
     record_pending_sync,
+    resulting_media_item,
     was_previously_watched,
-    STATE_ENV,
 )
 
 
@@ -550,7 +549,7 @@ class JellyfinEmby:
                                 status=WatchedStatus(
                                     completed=False,
                                     time=0,
-                                    viewed_date=datetime.today(),
+                                    viewed_date=datetime.now(UTC),
                                 ),
                             )
                         if (
@@ -630,7 +629,7 @@ class JellyfinEmby:
                                 status=WatchedStatus(
                                     completed=False,
                                     time=0,
-                                    viewed_date=datetime.today(),
+                                    viewed_date=datetime.now(UTC),
                                 ),
                             )
                         if (
@@ -692,7 +691,7 @@ class JellyfinEmby:
                 )
                 progress.update(index)
             return watched
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             logger.error(
                 "{} [{}]: Failed catalog-scoped watched fetch for {} in "
                 "library {} ({})",
@@ -1182,7 +1181,7 @@ class JellyfinEmby:
                                             status=stored_movie.status,
                                         ),
                                     )
-                                except Exception as error:
+                                except Exception as error:  # noqa: BLE001
                                     logger.error(
                                         f"{self.server_type}: Failed to mark {jellyfin_video.get('Name')} as unwatched, Error: {error}"
                                     )
@@ -1518,7 +1517,7 @@ class JellyfinEmby:
                                                     status=stored_ep.status,
                                                 ),
                                             )
-                                        except Exception as error:
+                                        except Exception as error:  # noqa: BLE001
                                             logger.error(
                                                 f"{self.server_type}: Failed to mark {episode_name} as unwatched, Error: {error}"
                                             )

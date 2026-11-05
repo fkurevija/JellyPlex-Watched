@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 from conftest import settings_override
+
 from src import plex as plex_module
 from src.settings import PlexSettings
 from src.watched import LibraryData, MediaIdentifiers, MediaItem, WatchedStatus
@@ -101,7 +102,7 @@ def test_catalog_scoped_movie_fetch_looks_up_only_catalog_identities(monkeypatch
                 status=WatchedStatus(
                     completed=False,
                     time=0,
-                    viewed_date=datetime.now(timezone.utc),
+                    viewed_date=datetime.now(UTC),
                 ),
             )
         ],
@@ -153,7 +154,7 @@ def test_catalog_scoped_movie_fetch_keeps_unwatched_identity_baseline(monkeypatc
                 status=WatchedStatus(
                     completed=True,
                     time=0,
-                    viewed_date=datetime.now(timezone.utc),
+                    viewed_date=datetime.now(UTC),
                 ),
             )
         ],
@@ -204,7 +205,7 @@ def test_catalog_scoped_movie_fetch_rejects_title_only_nonmatches(monkeypatch) -
                 status=WatchedStatus(
                     completed=False,
                     time=0,
-                    viewed_date=datetime.now(timezone.utc),
+                    viewed_date=datetime.now(UTC),
                 ),
             )
         ],

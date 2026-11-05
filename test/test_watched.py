@@ -1,9 +1,8 @@
 import json
-import sqlite3
-from datetime import timedelta, timezone
 import os
+import sqlite3
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from conftest import settings_override
 
@@ -23,6 +22,7 @@ from src.watched import (
     LibraryData,
     MediaIdentifiers,
     MediaItem,
+    Ord,
     Series,
     UserData,
     WatchedStatus,
@@ -32,10 +32,9 @@ from src.watched import (
     compare_media_items,
     initialize_watched_state_db,
     load_state_index,
-    was_previously_watched,
     mediaitem_state_key,
-    Ord,
     record_pending_sync,
+    was_previously_watched,
 )
 
 viewed_date = datetime.now(UTC)
@@ -802,7 +801,7 @@ def test_json_state_is_migrated_and_unwatched_transition_is_persisted(tmp_path):
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            viewed_date=datetime(2024, 1, 1, tzinfo=UTC),
         ),
     )
     json_path = tmp_path / "watched.json"
@@ -835,7 +834,7 @@ def test_json_state_is_migrated_and_unwatched_transition_is_persisted(tmp_path):
     apply_manual_unwatched_state(watched, env)
 
     assert item.status.time == 0
-    assert item.status.viewed_date > datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert item.status.viewed_date > datetime(2024, 1, 1, tzinfo=UTC)
     with sqlite3.connect(initialize_watched_state_db(env)) as connection:
         row = connection.execute(
             "SELECT completed, resume_ms, manual_unwatched_at FROM media_state"
@@ -854,7 +853,7 @@ def test_watched_state_is_scoped_to_source_server(tmp_path):
         status=WatchedStatus(
             completed=True,
             time=0,
-            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            viewed_date=datetime(2024, 1, 1, tzinfo=UTC),
         ),
     )
     unwatched_item = MediaItem(
@@ -862,7 +861,7 @@ def test_watched_state_is_scoped_to_source_server(tmp_path):
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            viewed_date=datetime(2024, 1, 1, tzinfo=UTC),
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -891,7 +890,7 @@ def test_watched_state_is_scoped_to_source_server(tmp_path):
     )
 
     assert unwatched_item.status.viewed_date == datetime(
-        2024, 1, 1, tzinfo=timezone.utc
+        2024, 1, 1, tzinfo=UTC
     )
 
 
@@ -906,7 +905,7 @@ def test_manual_unwatched_state_wins_over_partial_progress():
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
             manually_unwatched=True,
         ),
     )
@@ -915,7 +914,7 @@ def test_manual_unwatched_state_wins_over_partial_progress():
         status=WatchedStatus(
             completed=False,
             time=300_000,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
 
@@ -927,7 +926,7 @@ def test_manual_unwatched_state_wins_over_partial_progress():
         status=WatchedStatus(
             completed=True,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
     assert compare_media_items(unwatched_item, completed_item, settings_override(), 100.0) == Ord.A_BETTER
@@ -941,7 +940,7 @@ def test_completed_state_beats_newer_unknown_incomplete_state():
         status=WatchedStatus(
             completed=True,
             time=0,
-            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            viewed_date=datetime(2024, 1, 1, tzinfo=UTC),
         ),
     )
     unknown_incomplete_item = MediaItem(
@@ -949,7 +948,7 @@ def test_completed_state_beats_newer_unknown_incomplete_state():
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
 
@@ -970,7 +969,7 @@ def test_unknown_zero_progress_item_does_not_remove_real_state():
         status=WatchedStatus(
             completed=True,
             time=0,
-            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            viewed_date=datetime(2024, 1, 1, tzinfo=UTC),
         ),
     )
     unknown_state = MediaItem(
@@ -978,7 +977,7 @@ def test_unknown_zero_progress_item_does_not_remove_real_state():
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
 
@@ -992,7 +991,7 @@ def test_unconfirmed_manual_flag_does_not_remove_real_state():
         status=WatchedStatus(
             completed=True,
             time=0,
-            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            viewed_date=datetime(2024, 1, 1, tzinfo=UTC),
         ),
     )
     synthetic_state = MediaItem(
@@ -1000,7 +999,7 @@ def test_unconfirmed_manual_flag_does_not_remove_real_state():
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
             manually_unwatched=True,
         ),
     )
@@ -1018,7 +1017,7 @@ def test_unknown_zero_progress_source_loses_to_meaningful_state():
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
     partial_item = MediaItem(
@@ -1026,7 +1025,7 @@ def test_unknown_zero_progress_source_loses_to_meaningful_state():
         status=WatchedStatus(
             completed=False,
             time=420_000,
-            viewed_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            viewed_date=datetime(2024, 1, 1, tzinfo=UTC),
         ),
     )
 
@@ -1046,7 +1045,7 @@ def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
         status=WatchedStatus(
             completed=True,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
     unwatched_item = MediaItem(
@@ -1054,7 +1053,7 @@ def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1078,7 +1077,7 @@ def test_pending_unwatched_sync_is_not_detected_as_manual(tmp_path):
         status=WatchedStatus(
             completed=True,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
     apply_manual_unwatched_state(
@@ -1106,7 +1105,7 @@ def test_pending_sync_matches_destination_without_server_scoped_key(tmp_path):
         status=WatchedStatus(
             completed=True,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
     destination_unwatched = MediaItem(
@@ -1114,7 +1113,7 @@ def test_pending_sync_matches_destination_without_server_scoped_key(tmp_path):
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1148,13 +1147,13 @@ def test_diverged_pending_sync_is_discarded_before_manual_unwatched_detection(
     watched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     unwatched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1202,7 +1201,7 @@ def test_manual_unwatch_detected_after_our_own_propagated_rewatch(tmp_path):
     jellyfin_never_watched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1216,7 +1215,7 @@ def test_manual_unwatch_detected_after_our_own_propagated_rewatch(tmp_path):
     plex_watched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     record_pending_sync(env, plex_watched, "Jellyfin")
@@ -1226,7 +1225,7 @@ def test_manual_unwatch_detected_after_our_own_propagated_rewatch(tmp_path):
     jellyfin_freshly_unwatched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1256,13 +1255,13 @@ def test_stale_pending_sync_does_not_suppress_new_manual_unwatch(tmp_path):
     watched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     unwatched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1282,7 +1281,7 @@ def test_stale_pending_sync_does_not_suppress_new_manual_unwatch(tmp_path):
     rewatched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1295,7 +1294,7 @@ def test_stale_pending_sync_does_not_suppress_new_manual_unwatch(tmp_path):
     # entry left over from an old/unrelated sync attempt.
     db_path = initialize_watched_state_db(env)
     stale_created_at = (
-        datetime.now(timezone.utc) - timedelta(hours=48)
+        datetime.now(UTC) - timedelta(hours=48)
     ).isoformat()
     with sqlite3.connect(db_path) as connection:
         connection.execute(
@@ -1322,13 +1321,13 @@ def test_manual_unwatched_transition_remains_explicit_until_watched(tmp_path):
     watched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     unwatched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1367,13 +1366,13 @@ def test_indexed_state_preserves_transition_timestamps(tmp_path):
     watched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     unwatched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1410,7 +1409,7 @@ def test_tracked_unwatched_state_remains_collectable(tmp_path):
     item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1439,7 +1438,7 @@ def test_cross_server_state_remains_collectable_for_unwatched_transition(tmp_pat
     watched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     unwatched_item = watched_item.model_copy(deep=True)
@@ -1465,7 +1464,7 @@ def test_cross_server_state_does_not_collect_completed_items(tmp_path):
     watched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1491,7 +1490,7 @@ def test_cross_server_fallback_ignores_partial_baseline(tmp_path):
         status=WatchedStatus(
             completed=False,
             time=240_000,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
     current_unwatched = partial_item.model_copy(deep=True)
@@ -1517,13 +1516,13 @@ def test_cross_server_observation_does_not_create_manual_unwatched_state(tmp_pat
     plex_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     emby_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1562,13 +1561,13 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
     plex_watched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     jellyfin_watched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1586,7 +1585,7 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
     jellyfin_unwatched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1598,7 +1597,7 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
     plex_synced_unwatched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1612,7 +1611,7 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
     jellyfin_still_unwatched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1627,7 +1626,7 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
     plex_rewatched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1655,7 +1654,7 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
     jellyfin_still_unwatched_again = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1666,7 +1665,7 @@ def test_fresh_rewatch_on_other_server_overrides_stale_manual_unwatched(tmp_path
     plex_rewatched_again = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1708,7 +1707,7 @@ def test_first_observation_does_not_override_concurrent_manual_unwatch(tmp_path)
     plex_watched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1719,7 +1718,7 @@ def test_first_observation_does_not_override_concurrent_manual_unwatch(tmp_path)
     plex_unwatched = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=False, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=False, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1735,7 +1734,7 @@ def test_first_observation_does_not_override_concurrent_manual_unwatch(tmp_path)
     jellyfin_first_seen_completed = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     apply_manual_unwatched_state(
@@ -1767,7 +1766,7 @@ def test_manual_unwatched_detection_ignores_other_source_baseline(tmp_path):
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime.now(timezone.utc),
+            viewed_date=datetime.now(UTC),
         ),
     )
     env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
@@ -1784,8 +1783,8 @@ def test_manual_unwatched_detection_ignores_other_source_baseline(tmp_path):
             (
                 mediaitem_state_key(emby_item, "Plex"),
                 emby_item.status.viewed_date.isoformat(),
-                datetime.now(timezone.utc).isoformat(),
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(UTC).isoformat(),
+                datetime.now(UTC).isoformat(),
             ),
         )
 
@@ -1807,7 +1806,7 @@ def test_source_exact_state_precedes_flexible_identity_match(tmp_path):
     watched_item = MediaItem(
         identifiers=identifiers,
         status=WatchedStatus(
-            completed=True, time=0, viewed_date=datetime.now(timezone.utc)
+            completed=True, time=0, viewed_date=datetime.now(UTC)
         ),
     )
     unwatched_item = watched_item.model_copy(deep=True)

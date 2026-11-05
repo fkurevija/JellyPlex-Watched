@@ -83,7 +83,7 @@ def generate_sync_inventory(
                     )
                 else:
                     raise TypeError("User representation does not match server")
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 logger.warning(
                     "Could not get library sizes for {} on {} ({}); "
                     "catalog scoping will be unavailable for those libraries",
@@ -307,7 +307,7 @@ def fetch_watched_inventory(
                         )
                 else:
                     raise TypeError("User representation does not match server")
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
                 logger.warning(
                     "Could not build catalog from {} library {} ({})",
                     seed_server.server_settings.name,
