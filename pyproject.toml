@@ -22,3 +22,12 @@ dev = [
     "types-requests>=2.33.0.20260408",
     "vulture>=2.16",
 ]
+
+[[tool.ty.overrides]]
+include = ["test/**"]
+
+[tool.ty.overrides.rules]
+# Tests use lightweight fakes in place of SDK and settings objects.
+invalid-assignment = "ignore"
+invalid-argument-type = "ignore"
+unresolved-attribute = "ignore"

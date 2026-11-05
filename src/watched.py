@@ -228,14 +228,14 @@ def mediaitem_state_key(item: MediaItem, source_server: str | None = None) -> st
     return json.dumps(payload, sort_keys=True)
 
 
-def watched_state_db_path(env: dict[str, str | float | None] | None) -> str:
+def watched_state_db_path(env: dict[str, Any] | None) -> str:
     db_path = get_env_value(env, "WATCHED_STATE_DB", ".jellyplex-watched-state.db")
     if not os.path.isabs(db_path):
         db_path = os.path.join(os.getcwd(), db_path)
     return db_path
 
 
-def legacy_watched_state_path(env: dict[str, str | float | None] | None) -> str:
+def legacy_watched_state_path(env: dict[str, Any] | None) -> str:
     state_path = get_env_value(env, "WATCHED_STATE_FILE", ".jellyplex-watched-state.json")
     if not os.path.isabs(state_path):
         state_path = os.path.join(os.getcwd(), state_path)
@@ -243,7 +243,7 @@ def legacy_watched_state_path(env: dict[str, str | float | None] | None) -> str:
 
 
 def initialize_watched_state_db(
-    env: dict[str, str | float | None] | None,
+    env: dict[str, Any] | None,
 ) -> str:
     db_path = watched_state_db_path(env)
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
@@ -342,7 +342,7 @@ def initialize_watched_state_db(
 
 def was_previously_watched(
     item: MediaItem,
-    env: dict[str, str | float | None],
+    env: dict[str, Any],
 ) -> bool:
     state_index = env.get("_watched_state_index")
     if isinstance(state_index, dict):
@@ -367,7 +367,7 @@ def was_previously_watched(
 
 
 def load_previously_watched_keys(
-    env: dict[str, str | float | None],
+    env: dict[str, Any],
     source_server: str | None,
 ) -> set[str]:
     """Load completed state keys once for a server snapshot."""
@@ -397,7 +397,7 @@ def _identity_values(item: MediaItem) -> tuple[tuple[str, ...], str | None, str 
 
 
 def load_state_index(
-    env: dict[str, str | float | None],
+    env: dict[str, Any],
     source_server: str | None,
 ) -> dict[str, Any]:
     """Load and normalize all state used during one server snapshot."""
@@ -776,7 +776,7 @@ def _apply_manual_unwatched_item_state_db(
 
 
 def record_pending_sync(
-    env: dict[str, str | float | None],
+    env: dict[str, Any],
     item: MediaItem,
     destination_server: str,
     destination_item: MediaItem | None = None,
@@ -804,9 +804,10 @@ def record_pending_sync(
     destination_state_key = mediaitem_state_key(
         destination_item or item, destination_server
     )
+    indexes = env.get("_watched_state_indexes")
     destination_index = (
-        env.get("_watched_state_indexes", {}).get(destination_server)
-        if isinstance(env.get("_watched_state_indexes"), dict)
+        indexes.get(destination_server)
+        if isinstance(indexes, dict)
         else env.get("_watched_state_index")
     )
     manual_unwatched_at = (
@@ -888,7 +889,7 @@ def record_pending_sync(
 
 def apply_manual_unwatched_state(
     watched_list: dict[str, UserData],
-    env: dict[str, str | float | None],
+    env: dict[str, Any],
     source_server: str | None = None,
 ) -> dict[str, UserData]:
     db_path = initialize_watched_state_db(env)
