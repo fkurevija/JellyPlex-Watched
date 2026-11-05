@@ -1,9 +1,5 @@
-<<<<<<< HEAD
 from datetime import UTC, datetime
-=======
-from datetime import datetime, timezone
 from types import SimpleNamespace
->>>>>>> 17072f2 (feat(jellyfin): use PlayedItems endpoint for marking watched on Jellyfin servers)
 from unittest.mock import Mock
 
 import pytest

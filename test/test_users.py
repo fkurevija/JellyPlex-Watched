@@ -2,11 +2,7 @@ import os
 import sys
 from datetime import UTC, datetime
 from types import SimpleNamespace
-<<<<<<< HEAD
 from unittest.mock import Mock, create_autospec
-=======
-from unittest.mock import Mock
->>>>>>> 17072f2 (feat(jellyfin): use PlayedItems endpoint for marking watched on Jellyfin servers)
 
 from conftest import settings_override
 from plexapi.myplex import MyPlexAccount, MyPlexUser
@@ -486,14 +482,10 @@ def test_jellyfin_receipt_contains_only_confirmed_item_writes(tmp_path):
     posted_ids: list[str] = []
     posted_paths: list[str] = []
 
-    def query(query: str, query_type: str, **_kwargs):
+    def query(path: str, query_type: str, **_kwargs):
         if query_type == "get":
             return {"Items": destination_items}
-<<<<<<< HEAD
-        item_id = query.split("/Items/", 1)[1].split("/", 1)[0]
-=======
         item_id = path.split("/PlayedItems/", 1)[1].split("?", 1)[0]
->>>>>>> 17072f2 (feat(jellyfin): use PlayedItems endpoint for marking watched on Jellyfin servers)
         if item_id == "failed-id":
             raise RuntimeError("simulated write failure")
         posted_ids.append(item_id)
@@ -556,7 +548,7 @@ def test_jellyfin_marks_watched_episodes_via_played_items(tmp_path, monkeypatch)
         status=WatchedStatus(
             completed=True,
             time=0,
-            viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            viewed_date=datetime(2026, 1, 1, tzinfo=UTC),
         ),
     )
     series = Series(
@@ -799,9 +791,6 @@ def test_jellyfin_watched_includes_played_series_with_zero_aggregate_count():
             },
         ]
     )
-<<<<<<< HEAD
-    adapter.query = Mock(side_effect=responses)
-=======
     query_paths = []
 
     def query(path, method):
@@ -809,7 +798,6 @@ def test_jellyfin_watched_includes_played_series_with_zero_aggregate_count():
         return next(responses)
 
     adapter.query = query
->>>>>>> 17072f2 (feat(jellyfin): use PlayedItems endpoint for marking watched on Jellyfin servers)
 
     watched = adapter.get_user_library_watched(
         "JellyUser",
@@ -888,7 +876,7 @@ def test_jellyfin_catalog_fetch_searches_only_catalog_movies():
                 status=WatchedStatus(
                     completed=False,
                     time=0,
-                    viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    viewed_date=datetime(2026, 1, 1, tzinfo=UTC),
                 ),
             )
         ],
@@ -929,7 +917,7 @@ def test_jellyfin_catalog_keeps_unwatched_movie_as_identity_baseline():
                 status=WatchedStatus(
                     completed=False,
                     time=0,
-                    viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    viewed_date=datetime(2026, 1, 1, tzinfo=UTC),
                 ),
             )
         ],
@@ -995,7 +983,7 @@ def test_jellyfin_catalog_fetch_limits_episodes_to_catalog_show():
                         status=WatchedStatus(
                             completed=False,
                             time=0,
-                            viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                            viewed_date=datetime(2026, 1, 1, tzinfo=UTC),
                         ),
                     ),
                     MediaItem(
@@ -1005,7 +993,7 @@ def test_jellyfin_catalog_fetch_limits_episodes_to_catalog_show():
                         status=WatchedStatus(
                             completed=False,
                             time=0,
-                            viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                            viewed_date=datetime(2026, 1, 1, tzinfo=UTC),
                         ),
                     ),
                 ],

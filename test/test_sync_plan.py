@@ -463,7 +463,7 @@ def test_unwatched_catalog_baseline_contributes_target_identifiers_only():
         status=WatchedStatus(
             completed=False,
             time=0,
-            viewed_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            viewed_date=datetime(2026, 1, 1, tzinfo=UTC),
         ),
     )
     watched = {
@@ -473,7 +473,7 @@ def test_unwatched_catalog_baseline_contributes_target_identifiers_only():
                 status=WatchedStatus(
                     completed=True,
                     time=0,
-                    viewed_date=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                    viewed_date=datetime(2026, 1, 2, tzinfo=UTC),
                 ),
             )
         ),

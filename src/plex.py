@@ -720,6 +720,9 @@ class Plex:
                             f"Plex: Failed to get token for {user.title}, skipping",
                         )
                         continue
+                else:
+                    logger.warning("Plex: Skipping non-admin account {}", user.title)
+                    continue
 
                 user_name = normalize_name(user.username if user.username else user.title)
 
