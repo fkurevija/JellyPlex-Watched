@@ -842,6 +842,52 @@ def test_json_state_is_migrated_and_unwatched_transition_is_persisted(tmp_path):
     assert row == (0, 0, item.status.viewed_date.isoformat())
 
 
+def test_episode_title_match_requires_same_series_and_season(tmp_path):
+    def episode(scope, location, completed):
+        return MediaItem(
+            identifiers=MediaIdentifiers(
+                title="Episode 3", scope=scope, locations=(location,)
+            ),
+            status=WatchedStatus(
+                completed=completed,
+                time=0,
+                viewed_date=datetime(2024, 1, 1, tzinfo=UTC),
+            ),
+        )
+
+    def apply(item):
+        apply_manual_unwatched_state(
+            {
+                "user": UserData(
+                    libraries={
+                        "TV": LibraryData(
+                            title="TV",
+                            series=[
+                                Series(
+                                    identifiers=MediaIdentifiers(title="Show"),
+                                    episodes=[item],
+                                )
+                            ],
+                        )
+                    }
+                )
+            },
+            env,
+            "Plex",
+        )
+
+    env = {"WATCHED_STATE_DB": str(tmp_path / "watched.db")}
+    apply(episode("Show|S1", "Show - S01E03.mkv", True))
+
+    other_season = episode("Show|S2", "Show - S02E03.mkv", False)
+    apply(other_season)
+    assert not other_season.status.manually_unwatched
+
+    same_season = episode("Show|S1", "Show - S01E03.mkv", False)
+    apply(same_season)
+    assert same_season.status.manually_unwatched
+
+
 def test_watched_state_is_scoped_to_source_server(tmp_path):
     item_identifiers = MediaIdentifiers(
         title="Source Scoped Item",

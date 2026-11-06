@@ -25,6 +25,10 @@ class Ord(IntEnum):
 class MediaIdentifiers(BaseModel):
     title: str | None = None
 
+    # Series title and season for episodes. Episode titles such as "Episode 3"
+    # repeat across seasons and shows, so title matching must honor this.
+    scope: str | None = None
+
     # File information, will be folder for series and media file for episode/movie
     locations: tuple[str, ...] = ()
 
@@ -209,16 +213,16 @@ per-server in-memory indexes, and the current fetch source)."""
 
 
 def mediaitem_identity_key(item: MediaItem) -> str:
-    return json.dumps(
-        {
+    payload = {
         "title": item.identifiers.title or "",
         "locations": list(item.identifiers.locations),
         "imdb_id": item.identifiers.imdb_id or "",
         "tvdb_id": item.identifiers.tvdb_id or "",
         "tmdb_id": item.identifiers.tmdb_id or "",
-        },
-        sort_keys=True,
-    )
+    }
+    if item.identifiers.scope:
+        payload["scope"] = item.identifiers.scope
+    return json.dumps(payload, sort_keys=True)
 
 
 def mediaitem_state_key(item: MediaItem, source_server: str | None = None) -> str:
@@ -385,14 +389,26 @@ def load_previously_watched_keys(
     return {row[0] for row in rows}
 
 
-def _identity_values(item: MediaItem) -> tuple[tuple[str, ...], str | None, str | None, str | None, str | None]:
+def _title_match_key(title: str | None, scope: str | None) -> tuple[str, str] | None:
+    # Titles only match within the same series/season scope; rows stored
+    # before scopes existed (scope "") never match a scoped episode.
+    return (scope or "", title) if title else None
+
+
+def _identity_field(identity: dict[str, Any], field: str) -> Any:
+    if field == "title":
+        return _title_match_key(identity.get("title"), identity.get("scope"))
+    return identity.get(field)
+
+
+def _identity_values(item: MediaItem) -> tuple[tuple[str, ...], str | None, str | None, str | None, tuple[str, str] | None]:
     identifiers = item.identifiers
     return (
         tuple(identifiers.locations),
         identifiers.imdb_id,
         identifiers.tvdb_id,
         identifiers.tmdb_id,
-        identifiers.title,
+        _title_match_key(identifiers.title, identifiers.scope),
     )
 
 
@@ -482,7 +498,7 @@ def load_state_index(
             ("tmdb_id", "by_tmdb_id"),
             ("title", "by_title"),
         ):
-            value = identity.get(field)
+            value = _identity_field(identity, field)
             if value:
                 index[
                     index_name if is_current_source else f"by_any_{field}"
@@ -497,7 +513,7 @@ def load_state_index(
         for location in identity.get("locations", []):
             index["pending"].setdefault(("location", location), normalized)
         for field in ("imdb_id", "tvdb_id", "tmdb_id", "title"):
-            value = identity.get(field)
+            value = _identity_field(identity, field)
             if value:
                 index["pending"].setdefault((field, value), normalized)
     return index
@@ -570,7 +586,7 @@ def _index_state_row(
         ("tmdb_id", "by_tmdb_id"),
         ("title", "by_title"),
     ):
-        value = identity.get(field)
+        value = _identity_field(identity, field)
         if value:
             state_index[index_name][value] = normalized
 
@@ -626,7 +642,9 @@ def _identities_match(item: MediaItem, stored_identity: dict[str, Any]) -> bool:
         value = getattr(item.identifiers, field)
         if value and value == stored_identity.get(field):
             return True
-    return item.identifiers.title == stored_identity.get("title")
+    return _title_match_key(
+        item.identifiers.title, item.identifiers.scope
+    ) == _identity_field(stored_identity, "title")
 
 
 def _find_pending(index: dict[str, Any], item: MediaItem) -> tuple | None:
@@ -882,7 +900,7 @@ def record_pending_sync(
         for location in identity.get("locations", []):
             state_index["pending"][("location", location)] = normalized
         for field in ("imdb_id", "tvdb_id", "tmdb_id", "title"):
-            value = identity.get(field)
+            value = _identity_field(identity, field)
             if value:
                 state_index["pending"][(field, value)] = normalized
 

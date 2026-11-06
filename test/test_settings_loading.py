@@ -945,7 +945,8 @@ def test_migration_round_trip_preserves_effective_settings_and_policy(
 
     assert _effective_settings(legacy) == _effective_settings(yaml_only)
     assert _policy_snapshot(legacy) == _policy_snapshot(yaml_only)
-    assert generated_yaml.stat().st_mode & 0o777 == stat.S_IRUSR | stat.S_IWUSR
+    if os.name != "nt":  # Windows does not support POSIX permission bits
+        assert generated_yaml.stat().st_mode & 0o777 == stat.S_IRUSR | stat.S_IWUSR
 
 
 def test_migration_preserves_mixed_prefixed_server_token_override(

@@ -97,6 +97,11 @@ def extract_identifiers_from_item(
 
     return MediaIdentifiers(
         title=item.title,
+        scope=(
+            f"{item.grandparentTitle}|S{item.seasonNumber}"
+            if isinstance(item, Episode)
+            else None
+        ),
         locations=locations,
         imdb_id=guids.get("imdb"),
         tvdb_id=guids.get("tvdb"),
