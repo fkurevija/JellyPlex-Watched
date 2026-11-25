@@ -4,6 +4,10 @@
 
 Sync watched between jellyfin, plex and emby locally
 
+> **Note:** This project is a fork of [luigi311/JellyPlex-Watched](https://github.com/luigi311/JellyPlex-Watched). The upstream maintainer has indicated they are not interested in adding support for syncing manual unwatched state between media libraries. This fork adds that functionality.
+
+> **AI Disclosure:** Portions of this codebase, documentation, or tests were generated or refactored with the assistance of AI tools (e.g. GitHub Copilot, Claude, ChatGPT). All AI-generated outputs have been reviewed, tested, and verified by human maintainers.
+
 ## Description
 
 Keep in sync all your users watched history between jellyfin, plex and emby servers locally. This uses file names and provider ids to find the correct episode/movie between the two. This is not perfect but it works for most cases. You can use this for as many servers as you want by entering multiple options in the config.
