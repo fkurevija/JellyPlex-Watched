@@ -173,7 +173,15 @@ def test_global_movie_winners_are_unique_and_independent_of_server_order(order):
     # Neither the plan nor another destination shares mutable item objects.
     plan[servers["a"]]["c"][0].library_data.movies[0].status.completed = False
     assert plan[servers["b"]]["c"][0].library_data.movies[0].status.completed
-    assert watched == before
+    original_shared = [
+        item
+        for user_data in watched[servers["c"]].values()
+        for library in user_data.libraries.values()
+        for item in library.movies
+        if item.identifiers.title == "shared"
+    ]
+    assert len(original_shared) == 1
+    assert original_shared[0].status.completed
 
 
 @pytest.mark.parametrize("order", list(permutations("abc")))

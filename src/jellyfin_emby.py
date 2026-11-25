@@ -125,6 +125,7 @@ class JellyfinEmby:
         server_settings: JellyfinSettings | EmbySettings,
         server_type: Literal["Jellyfin", "Emby"],
         headers: dict[str, str],
+        partial_update_min_version: Version,
     ) -> None:
         self.app_settings: AppSettings = app_settings
         self.server_settings = server_settings
@@ -147,13 +148,16 @@ class JellyfinEmby:
             raise TypeError(f"{self.server_type}: missing or invalid server version")
         self.server_name: str = server_name
         self.server_version: Version = server_version
-        self.update_partial: bool = self.is_partial_update_supported(
-            self.server_version
-        )
+        self.partial_update_min_version = partial_update_min_version
+        self.update_partial: bool = self.server_version >= partial_update_min_version
+        if not self.update_partial:
+            logger.info(
+                f"{self.server_type}: Server version {self.server_version} does not support updating playback position."
+            )
 
     def is_partial_update_supported(self, server_version: Version) -> bool:
-        """Subclasses define the versions supporting playback-position writes."""
-        raise NotImplementedError("Server adapters must define partial-update support")
+        """Return whether this adapter's configured version supports position writes."""
+        return server_version >= self.partial_update_min_version
 
     def query(
         self,

@@ -1,5 +1,4 @@
-from loguru import logger
-from packaging.version import Version, parse
+from packaging.version import parse
 
 from src.jellyfin_emby import JellyfinEmby
 from src.settings import AppSettings, JellyfinSettings
@@ -29,13 +28,5 @@ class Jellyfin(JellyfinEmby):
             server_settings=server_settings,
             server_type="Jellyfin",
             headers=headers,
+            partial_update_min_version=parse("10.9.0"),
         )
-
-    def is_partial_update_supported(self, server_version: Version) -> bool:
-        if not server_version >= parse("10.9.0"):
-            logger.info(
-                f"{self.server_type}: Server version {server_version} does not support updating playback position.",
-            )
-            return False
-
-        return True
