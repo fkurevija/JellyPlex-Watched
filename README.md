@@ -379,7 +379,7 @@ silently broadening the catalog.
 - or use pre-built image
 
   ```bash
-  docker pull luigi311/jellyplex-watched:latest
+  docker pull fkurevija/jellyplex-watched:main
   ```
 
 When starting directly as a non-root user with `--user` or Compose `user:`,
