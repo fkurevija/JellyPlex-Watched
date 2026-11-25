@@ -402,7 +402,7 @@ or tmpfs for both paths.
     --env PUID="$(id -u)" \
     --env PGID="$(id -g)" \
     -v "$(pwd)/config.yaml:/app/config/config.yaml:ro" \
-    luigi311/jellyplex-watched:latest
+    fkurevija/jellyplex-watched:main
   ```
 
 #### With a named credential override
@@ -426,7 +426,7 @@ username/password/server name fields. A legacy `PLEX_TOKEN` without
      --env PUID="$(id -u)" \
      --env PGID="$(id -g)" \
      -v "$(pwd)/.env:/app/.env" \
-     luigi311/jellyplex-watched:latest
+     fkurevija/jellyplex-watched:main
   ```
 
 ## Troubleshooting/Issues
