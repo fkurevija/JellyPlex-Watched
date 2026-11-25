@@ -1,0 +1,85 @@
+name: Upstream sync check
+
+on:
+  schedule:
+    - cron: '17 13 * * *' # 08:17 EST / 09:17 EDT
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream main
+        run: |
+          git remote add upstream https://github.com/luigi311/JellyPlex-Watched.git
+          git fetch --no-tags upstream main
+
+      - name: Check distance and sync tracking issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FORK_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          behind=$(git rev-list --count HEAD..upstream/main)
+          ahead=$(git rev-list --count upstream/main..HEAD)
+          upstream_sha=$(git rev-parse --short upstream/main)
+          label="upstream-sync"
+
+          gh label create "$label" \
+            --color "0E8A16" \
+            --description "Fork is behind upstream and needs a rebase" \
+            --force > /dev/null
+
+          issue_number=$(gh issue list --state open --label "$label" --json number --jq '.[0].number // empty')
+
+          if [ "$behind" -eq 0 ]; then
+            if [ -n "$issue_number" ]; then
+              gh issue close "$issue_number" --comment "Fork is up to date with upstream at $upstream_sha."
+            else
+              echo "Fork is up to date with upstream at $upstream_sha; nothing to do."
+            fi
+            exit 0
+          fi
+
+          new_commits=$(git log -n 20 --no-merges --format='- %h %s' HEAD..upstream/main)
+          title="Upstream is $behind commit(s) ahead of this fork"
+          body=$(cat <<EOF
+          This fork is **$behind commit(s) behind** upstream and **$ahead commit(s) ahead**.
+
+          Upstream \`main\` is at \`$upstream_sha\`.
+          Compare: https://github.com/$GH_REPO/compare/main...luigi311:JellyPlex-Watched:main
+
+          Recent upstream commits:
+          $new_commits
+
+          To rebase (this rewrites fork commits, so a force-push is required afterward):
+
+          \`\`\`bash
+          git fetch upstream
+          git rebase upstream/main
+          git push --force-with-lease origin main
+          \`\`\`
+
+          This issue is maintained by the scheduled upstream sync check; it will be updated or closed automatically.
+          EOF
+          )
+
+          if [ -n "$issue_number" ]; then
+            gh issue edit "$issue_number" --title "$title" --body "$body"
+            echo "Updated tracking issue #$issue_number."
+          else
+            gh issue create --title "$title" --body "$body" --label "$label" --assignee "$FORK_OWNER"
+            echo "Created tracking issue."
+          fi
